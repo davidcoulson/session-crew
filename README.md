@@ -26,17 +26,29 @@ sessions) and **Refresh**. The status line also carries `crew: 2 working · 1 sl
 
 ### The strip above the prompt
 
-Always in view, above the prompt box: one small crab per session that needs a glance, with a short name under it.
+Always in view, above the prompt box: a card per session that needs a glance, the crab (1.5× by default) beside a
+short label, with a coloured status pill under it. The pill is the signal, and each has its own icon and words, so
+colour is never the only cue:
 
-- **working**: walks, prop in motion; listed first
-- **waiting on you** (went idle in the last hour): standing still, eyes open, a red `!`
-- **just finished**: celebrates for 5 s, then a green check mark; it stays until your next prompt (at least a minute), then leaves
-- more than fit: `+N`; the **crew N** button beside it opens the pane
+| pill | when |
+| --- | --- |
+| **`! needs you`** (solid) | went idle in the last 15 minutes: its turn ended and it waits on you |
+| `● working 12m` | working, for that long |
+| `z idle` | went idle 15 to 60 minutes ago |
+| `✓ done` / `✓ done · PR #226` | finished while you watched: celebrates for 5 s, then goes muted (still readable) and stays until your next prompt, at least a minute |
+
+Order: needs you, working, idle, done. With more than six, the needs-you and working cards show and the rest are
+`+N more`. Beside the cards, **"4 sessions · 2 working · 1 needs you · 1 done"** (just `● 2  ! 1  ✓ 1` when narrow)
+opens the pane. Hover a card for the session's full title and status.
+
+**Labels** come from, in order: a `labels` rule or `/crew label`; else a 1–3 word label a small model (Haiku, low
+effort) writes from the title, once per session and kept across sessions (`aiLabels: false` turns that off); else
+the title shortened by rule (its opening verb dropped, cut at a word). Up to 16 characters show.
 
 Sessions first seen already idle or done (an import, the app's note at start) show only in the pane, so the strip
 holds what changed while you watched. It sits on top of anything else in that band (savvy-progress's bar); while
 savvy-progress shows a flow and is higher in the chain it draws alone, and the strip is back when the flow ends.
-The terminal draws the same strip in text: `▣` in the costume's color, a spinner, `!` or `✓`, and the name.
+The terminal draws the same cards in text: `▣ Label` and a coloured `● working 12m`, ` ! needs you `, `z idle` or `✓ done`.
 
 ### Commands
 
@@ -46,6 +58,8 @@ The terminal draws the same strip in text: `▣` in the costume's color, a spinn
 - `/crew import [parent <local_id>] [<name-glob>] [--archived]`: bring in sessions that already exist (see below); `/crew import off` stops
 - `/crew refresh`: ask the app for the sessions now
 - `/crew strip on|off`: show or hide the strip above the prompt (kept across sessions); bare `/crew strip` toggles
+- `/crew label <name-or-glob> <label>`: the strip's label for matching sessions (kept across sessions); without a label it removes the rule
+- `/crew labels`: list the label rules and every session's label
 - `/crew compact`: toggle the crabs-only rows in the pane
 - `/crew clear`: drop finished sessions
 - `/crew debug`: dump the crew, poll and strip state as JSON (`strip.band` counts the band's draws, and names the surface asking)
@@ -127,6 +141,9 @@ everything the app already tells the session:
   "session-crew": {
     "options": {
       "faces": ["nut-*=engineer", "prismarr*=chef", "*dns*=detective"],
+      "labels": ["todo-mod=To-do mod", "add-nic-*=NIC sensors"],
+      "aiLabels": true,
+      "stripScale": 1.5,
       "pollSeconds": 30,
       "autoOpen": true,
       "strip": true
@@ -135,7 +152,8 @@ everything the app already tells the session:
 }
 ```
 
-`strip: false` starts sessions without the strip (`/crew strip on` still shows it). `faces` rules are `pattern=costume`, matched against a session's name, title or id with `*` and `?`;
+`labels` rules are `pattern=label`, matched like `faces`, and win over the model's labels; `stripScale` sizes the
+strip's crabs (0.8 to 2.5). `strip: false` starts sessions without the strip (`/crew strip on` still shows it). `faces` rules are `pattern=costume`, matched against a session's name, title or id with `*` and `?`;
 the first match wins, and `/crew face` rules win over these. A rule naming no costume is ignored.
 savvy-flow's tier names (`fable`, `heavy`, `careful`, `medium`, `light`, `explore`) work as costumes too.
 

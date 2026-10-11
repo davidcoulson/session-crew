@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { CRAB_CSS, crab } from '../hooks/crab'
+import { cardOf, layoutStrip, textW } from '../hooks/band'
 import {
   assignCostumes,
   giveCostumes,
@@ -10,6 +11,14 @@ import {
   parseListing,
   selectForImport,
   stripItems,
+  stripShown,
+  stripSummary,
+  workingFor,
+  pillText,
+  shortLabel,
+  clipLabel,
+  parseLabels,
+  assignLabels,
   nextStripChange,
   parseFaceRules,
   parseLinkedNote,
@@ -189,7 +198,7 @@ describe('importing', () => {
 })
 
 describe('the strip above the prompt', () => {
-  const T = { idleMs: 3_600_000, celebrateMs: 5_000, holdMs: 60_000 }
+  const T = { needsMs: 900_000, idleMs: 3_600_000, celebrateMs: 5_000, holdMs: 60_000 }
   const base = () => upsertAll([], [
     { id: 'local_00000000-0000-0000-0000-000000000001', name: 'busy', status: 'working' },
     { id: 'local_00000000-0000-0000-0000-000000000002', name: 'seen-idle', status: 'idle' },
@@ -202,10 +211,12 @@ describe('the strip above the prompt', () => {
     let list = base()
     list = upsertAll(list, [{ id: 'local_00000000-0000-0000-0000-000000000004', status: 'idle' }, { id: 'local_00000000-0000-0000-0000-000000000005', status: 'done' }], 10_000, 'tool')
     expect(stripItems(list, 11_000, 0, T).map(i => [i.session.name, i.pose])).toEqual([
+      ['goes-idle', 'needs'],
       ['busy', 'working'],
-      ['goes-idle', 'waiting'],
       ['finishes', 'done'],
     ])
+    // A quarter of an hour on, it is plain idle (after working), still before done.
+    expect(stripItems(list, 10_000 + 900_001, 900_000, T).map(i => i.pose)).toEqual(['working', 'idle'])
     // Celebration over: a check mark; still there after a minute while no prompt came.
     expect(stripItems(list, 16_000, 0, T).at(-1)?.pose).toBe('finished')
     expect(stripItems(list, 600_000, 0, T).some(i => i.session.name === 'finishes')).toBe(true)
@@ -218,7 +229,9 @@ describe('the strip above the prompt', () => {
 
   test('the clock only matters when a pose is due to change', () => {
     let list = base()
-    expect(nextStripChange(stripItems(list, 1_000, 0, T), 1_000, T)).toBe(null)
+    // Working pills say "working <1m", then the minutes: the next change is on the minute.
+    expect(nextStripChange(stripItems(list, 1_000, 0, T), 1_000, T)).toBe(60_000)
+    expect(nextStripChange([], 1_000, T)).toBe(null)
     list = upsertAll(list, [{ id: 'local_00000000-0000-0000-0000-000000000005', status: 'done' }], 10_000, 'tool')
     expect(nextStripChange(stripItems(list, 11_000, 0, T), 11_000, T)).toBe(15_000)
   })
@@ -234,14 +247,90 @@ describe('the strip above the prompt', () => {
     for (const status of ['idle', 'done'] as const) {
       let list = upsertAll([], [parseStartResult(PROPOSED)!], 0, 's')
       list = upsertAll(list, [...parseProposalsStarted(LINKED), { id: 'local_b2441128-a7ac-4e22-81e8-52518a2540d0', status }], 5_000, 'linked-note')
-      expect(stripItems(list, 6_000, 0, T).map(i => i.pose)).toEqual([status === 'idle' ? 'waiting' : 'done'])
+      expect(stripItems(list, 6_000, 0, T).map(i => i.pose)).toEqual([status === 'idle' ? 'needs' : 'done'])
     }
+  })
+
+  test('pills, the summary and the overflow', () => {
+    const at = 1_000_000
+    const mk = (n: number, status: 'working' | 'idle' | 'done', note?: string) =>
+      upsertAll(upsertAll([], [{ id: `local_00000000-0000-0000-0000-0000000000${String(n).padStart(2, '0')}`, name: `s${n}`, status: 'working' }], 0, 't'), [{ id: `local_00000000-0000-0000-0000-0000000000${String(n).padStart(2, '0')}`, status, note }], at - 720_000, 't')
+    const list = [...mk(1, 'working'), ...mk(2, 'idle'), ...mk(3, 'done', 'PR #226'), ...mk(4, 'done'), ...mk(5, 'working'), ...mk(6, 'idle'), ...mk(7, 'working')]
+    const items = stripItems(list, at, 0, T)
+    expect(items.map(i => i.pose)).toEqual(['needs', 'needs', 'working', 'working', 'working', 'finished', 'finished'])
+    const byName = (n: string) => items.find(i => i.session.name === n)!
+    expect(pillText(byName('s1'), at)).toBe('working 16m')
+    expect([workingFor(59_000), workingFor(61_000), workingFor(7_300_000)]).toEqual(['<1m', '1m', '2h'])
+    expect(pillText(byName('s2'), at)).toBe('needs you')
+    expect(pillText(byName('s3'), at)).toBe('done · PR #226')
+    expect(pillText(byName('s4'), at)).toBe('done ✓')
+    expect(stripSummary(items, false)).toBe('7 sessions · 3 working · 2 needs you · 2 done')
+    expect(stripSummary(items, true)).toBe('● 3  ! 2  ✓ 2')
+    // More than six: needs-you and working first, the rest counted.
+    expect(stripShown(items, 10)).toEqual({ shown: items.slice(0, 5), more: 2 })
+    expect(stripShown(items, 3).more).toBe(4)
+    expect(stripShown(items.slice(0, 4), 10)).toEqual({ shown: items.slice(0, 4), more: 0 })
+  })
+
+  test('a narrow band keeps its row inside the band: counts alone, no forced card', () => {
+    const list = upsertAll([], [1, 2, 3].map(n => ({ id: `local_00000000-0000-0000-0000-00000000000${n}`, name: `s${n}`, title: `Session number ${n}`, status: 'working' as const })), 0, 't')
+    const items = stripItems(list, 1_000, 0, T)
+    const make = (i: (typeof items)[number]) => cardOf(i, i.session.title, 'other', 1_000, 1.5)
+    for (const W of [480, 900]) {
+      const r = layoutStrip(W, items, make, 1.5, n => stripSummary(items, n))
+      expect(r.band.width + textW(r.summary, 13) + 24).toBeLessThanOrEqual(W)
+    }
+    // Narrower than a card and the counts: one card within the band, the counts to wrap below it.
+    for (const W of [140, 260]) {
+      const r = layoutStrip(W, items, make, 1.5, n => stripSummary(items, n))
+      expect(r.shown).toBe(1)
+      expect(r.band.width).toBeLessThanOrEqual(W)
+      expect(r.summary).toBe('● 3')
+    }
+    expect(layoutStrip(2000, items, make, 1.5, n => stripSummary(items, n)).shown).toBe(3)
+  })
+
+  test('wide characters measure about an em each', () => {
+    expect(textW('你好世界', 12)).toBeGreaterThan(textW('abcd', 12) * 1.7)
   })
 
   test('an import inferred archived does not celebrate', () => {
     let list = upsertAll([], [{ id: 'local_00000000-0000-0000-0000-000000000009', name: 'x', status: 'working', isImported: true }], 0, 'import')
     list = upsertAll(list, [{ id: 'local_00000000-0000-0000-0000-000000000009', status: 'done', note: 'archived' }], 1_000, 'import')
     expect(stripItems(list, 2_000, 0, T).length).toBe(0)
+  })
+})
+
+describe('labels', () => {
+  test('short labels from titles', () => {
+    expect(shortLabel('Patched Prismarr build: library cache + PRs', 'prismarr-patch')).toBe('Prismarr build')
+    expect(shortLabel('Add NIC optics sub-devices to the HA integration', 'add-nic-optics-sub-devic')).toBe('NIC optics…')
+    expect(shortLabel('Build a to-do mod', 'todo-mod')).toBe('To-do mod')
+    expect(shortLabel('', 'nut-pr-review-fixes')).toBe('Nut pr review…')
+    expect(clipLabel('Set up Prismarr on Unraid server')).toBe('Set up Prismarr…')
+    expect(shortLabel('Set up Prismarr on Unraid', 'set-up-prismarr-on-unrai')).toBe('Prismarr…')
+    expect(shortLabel('Give each GPU its own HA sub-device', 'give-each-gpu-its-own-ha')).toBe('Each GPU…')
+    expect(clipLabel('Supercalifragilisticexpialidocious')).toBe('Supercalifragil…')
+  })
+
+  test('rules first, then the model\'s label, then the short title', () => {
+    const list = upsertAll([], [
+      { id: 'local_00000000-0000-0000-0000-000000000001', name: 'todo-mod', title: 'Build a to-do mod for Claude Code', status: 'working' },
+      { id: 'local_00000000-0000-0000-0000-000000000002', name: 'add-pool-drive-health-an', title: 'Add pool drive health and SMART attributes', status: 'working' },
+      { id: 'local_00000000-0000-0000-0000-000000000003', name: 'prismarr-patch', title: 'Patched Prismarr build: library cache + PRs', status: 'working' },
+    ], 0, 't')
+    const labels = assignLabels(list, parseFaceRules(['todo-*=My to-do mod for Claude']), {
+      'local_00000000-0000-0000-0000-000000000002': 'Pool health',
+      // An old label kept cut is none: the title's short form stands until it is asked again.
+      'local_00000000-0000-0000-0000-000000000003': 'Prismarr pat…',
+    })
+    expect([...labels.values()]).toEqual(['My to-do mod…', 'Pool health', 'Prismarr build'])
+  })
+
+  test('the model\'s answer: only the ids asked, clipped', () => {
+    const got = parseLabels('Here: {"a": "Pool health", "b": "A label far longer than sixteen", "c": "x"}', ['a', 'b'])
+    expect(got).toEqual({ a: 'Pool health' })
+    expect(parseLabels('no json', ['a'])).toEqual({})
   })
 })
 
@@ -478,8 +567,9 @@ describe('hooks', () => {
       const ui = await $.ui.mount({ ...band, surface } as never)
       expect(await ui.find({ type: 'Text', text: 'other bar' })).toBeDefined()
       expect(await ui.find({ type: 'Button', key: 'session-crew-open' })).toBeDefined()
-      if (surface === 'desktop') expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toContain('busy-crab working')
-      else expect(await ui.find({ type: 'Text', text: /busy-crab/ })).toBeDefined()
+      if (surface === 'desktop') expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toContain('Busy crab: working')
+      else expect(await ui.find({ type: 'Text', text: /Busy crab/ })).toBeDefined()
+      expect((await ui.find({ type: 'Button', key: 'session-crew-open' }))?.text).toContain('1 working')
       await ui.unmount()
     }
     expect((await $.command.run({ command: 'crew', args: 'strip off' } as never)).text).toContain('off')
@@ -505,6 +595,39 @@ describe('hooks', () => {
     await clock.advance(1_000)
     expect(await glyphs()).not.toBe(before)
     await ui.unmount()
+  })
+
+  test('new sessions get a short label from the model, once, kept in $.store', { options: { pollSeconds: 0 } }, async ($, on) => {
+    const clock = host(on)
+    const asked: string[] = []
+    on('model.complete', (_$, e) => {
+      asked.push(e.prompt)
+      return { value: { isAnswered: true, text: '{"local_00000000-0000-0000-0000-000000000001": "Pool health"}', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } } as never
+    })
+    await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+    await $.tool.call({ tool: 'mcp__session-crew__status', sessions: [{ id: 'local_00000000-0000-0000-0000-000000000001', name: 'add-pool-drive-health-an', title: 'Add pool drive health and SMART', status: 'working' }] } as never)
+    await clock.advance(5_000)
+    await clock.advance(5_000)
+    expect(asked.length).toBe(1)
+    expect(asked[0]).toContain('Add pool drive health and SMART')
+    expect((await $.command.run({ command: 'crew', args: 'labels' } as never)).text).toContain('add-pool-drive-health-an: Pool health')
+    // A rule wins.
+    await $.command.run({ command: 'crew', args: 'label add-pool-* Disks' } as never)
+    expect((await $.command.run({ command: 'crew', args: 'labels' } as never)).text).toContain('add-pool-drive-health-an: Disks')
+  })
+
+  test('a label another session already wrote is used, not asked again', { options: { pollSeconds: 0 } }, async ($, on) => {
+    const clock = host(on, { 'session-crew.writtenLabels': { 'local_00000000-0000-0000-0000-000000000001': 'Pool health' } })
+    let calls = 0
+    on('model.complete', () => {
+      calls++
+      return { value: { isAnswered: true, text: '{}', usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } } as never
+    })
+    await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+    await $.tool.call({ tool: 'mcp__session-crew__status', sessions: [{ id: 'local_00000000-0000-0000-0000-000000000001', name: 'pool', title: 'Add pool drive health', status: 'working' }] } as never)
+    await clock.advance(5_000)
+    expect(calls).toBe(0)
+    expect((await $.command.run({ command: 'crew', args: 'labels' } as never)).text).toContain('pool: Pool health')
   })
 
   test('the status tool and /crew face', { options: { pollSeconds: 0 } }, async ($, on) => {

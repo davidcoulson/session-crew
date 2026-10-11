@@ -79,6 +79,10 @@ declare module 'claude-code' {
       lastPromptAt: number
       /** The strip's own clock, ticked only while a finished crab is due to change. */
       bandNow: number
+      /** Label rules set with /crew label (pattern to label), mirrored from $.store. */
+      labels: Record<string, string>
+      /** Short labels the model wrote from titles, by session id, mirrored from $.store. */
+      written: Record<string, string>
       /** Costume rules set with /crew face (pattern to costume), mirrored from $.store. */
       faces: Record<string, string>
     }

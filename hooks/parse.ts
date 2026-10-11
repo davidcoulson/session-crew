@@ -409,49 +409,194 @@ export function giveCostumes(list: CrewSession[], book: CostumeBook): { list: Cr
   return { list: out, book: { byId, next } }
 }
 
+// --- labels ----------------------------------------------------------------
+
+export const LABEL_MAX = 16
+
+// Leading words a task title opens with that say nothing about which session it is.
+const LEADING =
+  /^(?:(?:please|let's|lets)\s+)?(?:add|adds|added|adding|build|builds|built|create|make|makes|fix|fixes|fixed|implement|set\s+up|setup|plan|draft|show|report|keep|give|group|address|prototype|verify|exercise|patched|patch|update|improve|investigate|review|test|write|move|port|refactor|support|enable|cap|find\s+and\s+fix|find|guard|check|run|try|use|get|wire\s+up|hook\s+up|clean\s+up)\s+/i
+const ARTICLE = /^(?:the|a|an)\s+/i
+
+/** Cuts a label to `max` characters, at a word when one ends late enough. */
+export function clipLabel(text: string, max = LABEL_MAX): string {
+  const t = text.trim().replace(/\s+/g, ' ')
+  if (t.length <= max) return t
+  const cut = t.slice(0, max)
+  const space = cut.lastIndexOf(' ')
+  let head = space >= max / 2 ? cut.slice(0, space) : cut.slice(0, max - 1)
+  // Never end on a word that only leads into the part cut off ("Prismarr on…").
+  for (let i = 0; i < 3; i++) {
+    const shorter = head.replace(/\s+(?:on|in|at|to|for|of|and|or|with|from|by|the|a|an|its|their|own|into|via|per)$/i, '')
+    if (shorter === head || shorter.length < 4) break
+    head = shorter
+  }
+  return head.replace(/[\s,.;:–—-]+$/, '') + '…'
+}
+
+/**
+ * A short human label from a session's title, without asking anyone: the
+ * part before a colon or bracket, its opening verb and article dropped
+ * ("Patched Prismarr build: library cache" → "Prismarr build"); the handle,
+ * spaced out, when there is no title.
+ */
+export function shortLabel(title: string, name: string): string {
+  let t = title.split(/\s*[:(\[|]|\s+[–—-]\s+/)[0]?.trim() ?? ''
+  for (let i = 0; i < 2; i++) t = t.replace(LEADING, '').replace(ARTICLE, '')
+  if (!t) t = name.replace(/[-_]+/g, ' ').trim()
+  return clipLabel(t.charAt(0).toUpperCase() + t.slice(1))
+}
+
+/**
+ * One label per session: the first `labels` rule whose pattern matches its
+ * name, title or id; else the model's short label, when one was asked for and
+ * kept; else `shortLabel`. Every label is clipped to LABEL_MAX.
+ */
+export function assignLabels(crew: readonly CrewSession[], rules: [string, string][], written: Readonly<Record<string, string>>): Map<string, string> {
+  const compiled = rules.map(([p, label]) => [globRe(p), label] as const)
+  const out = new Map<string, string>()
+  for (const s of crew) {
+    const hit = compiled.find(([re]) => re.test(s.name) || re.test(s.title) || re.test(s.id))
+    out.set(s.id, clipLabel(hit ? hit[1] : (writtenFor(s, written) ?? shortLabel(s.title, s.name))))
+  }
+  return out
+}
+
+/** The model's label for a session, if it wrote a whole one (an old cut one, ending "…", is none). */
+export function writtenFor(s: CrewSession, written: Readonly<Record<string, string>>): string | undefined {
+  const w = written[s.id] ?? written[s.taskId ?? '']
+  return w && !w.endsWith('…') ? w : undefined
+}
+
+/** What the model is asked, for sessions with no label yet. */
+export function labelPrompt(sessions: readonly { id: string; title: string }[]): string {
+  return (
+    `Give each Claude Code session below a short label for a status strip: 1 to 3 words, at most ${LABEL_MAX - 2} characters ` +
+    `(count them; shorter is better), ` +
+    `naming what it is about (a noun phrase, no leading verb), like "To-do mod", "Prismarr patch", "Pool health", "NIC sensors". ` +
+    `Answer with only a JSON object mapping each id to its label.\n\n` +
+    JSON.stringify(sessions.map(s => ({ id: s.id, title: s.title })))
+  )
+}
+
+/**
+ * The model's answer: labels for the ids it was asked about that fit
+ * LABEL_MAX whole (a longer one is no label, to ask again); anything else ignored.
+ */
+export function parseLabels(text: string, asked: readonly string[]): Record<string, string> {
+  const m = /\{[\s\S]*\}/.exec(text)
+  if (!m) return {}
+  let data: unknown
+  try {
+    data = JSON.parse(m[0])
+  } catch {
+    return {}
+  }
+  const out: Record<string, string> = {}
+  if (!data || typeof data !== 'object') return out
+  for (const id of asked) {
+    const v = (data as Record<string, unknown>)[id]
+    const label = typeof v === 'string' ? v.trim().replace(/^["']|["']$/g, '').replace(/\s+/g, ' ') : ''
+    if (label && label.length <= LABEL_MAX) out[id] = label
+  }
+  return out
+}
+
 // --- the strip above the prompt ------------------------------------------------
 
-export type StripItem = { session: CrewSession; pose: 'working' | 'waiting' | 'done' | 'finished' }
+export type StripPose = 'needs' | 'working' | 'idle' | 'done' | 'finished'
+export type StripItem = { session: CrewSession; pose: StripPose }
 
 export const STRIP_TIMES = {
-  /** An idle session waits for you in the strip this long after it went idle. */
+  /** A session that went idle this recently needs you. */
+  needsMs: 15 * 60_000,
+  /** After that it is plain idle in the strip, until this long after it went idle. */
   idleMs: 60 * 60_000,
-  /** A finished session celebrates this long, then shows a check mark. */
+  /** A finished session celebrates this long, then goes muted. */
   celebrateMs: 5_000,
   /** And stays at least this long, then until your next prompt. */
   holdMs: 60_000,
 }
 
+const POSE_ORDER: StripPose[] = ['needs', 'working', 'idle', 'done', 'finished']
+
 /**
- * Who the strip shows: every working session; idle ones that went idle in the
- * last hour (waiting on you); and ones that finished while this crew watched,
- * until your next prompt but at least a minute. Waiting and finished need a
- * change this crew saw (`changeSeenAt`): a row first seen already idle or done
- * (an import, the app's note at start) shows only in the pane.
+ * Who the strip shows, needs-you first, then working, idle and done: every
+ * working session; ones that went idle in the last 15 minutes (needs you) or
+ * hour (idle); and ones that finished while this crew watched, until your next
+ * prompt but at least a minute. Idle and done need a change this crew saw
+ * (`changeSeenAt`): a row first seen already idle or done (an import, the
+ * app's note at start) shows only in the pane.
  */
 export function stripItems(crew: readonly CrewSession[], at: number, lastPromptAt: number, t = STRIP_TIMES): StripItem[] {
-  const working: StripItem[] = []
-  const waiting: StripItem[] = []
-  const done: StripItem[] = []
+  const out: StripItem[] = []
   for (const s of crew) {
-    if (s.status === 'working') working.push({ session: s, pose: 'working' })
+    if (s.status === 'working') out.push({ session: s, pose: 'working' })
     else if (s.changeSeenAt === undefined) continue
-    else if (s.status === 'idle' && at - s.changedAt < t.idleMs) waiting.push({ session: s, pose: 'waiting' })
+    else if (s.status === 'idle' && at - s.changedAt < t.idleMs) out.push({ session: s, pose: at - s.changedAt < t.needsMs ? 'needs' : 'idle' })
     else if (s.status === 'done' && s.endedAt !== undefined && s.note !== 'archived') {
       const age = at - s.endedAt
-      if (age < t.holdMs || s.endedAt > lastPromptAt) done.push({ session: s, pose: age < t.celebrateMs ? 'done' : 'finished' })
+      if (age < t.holdMs || s.endedAt > lastPromptAt) out.push({ session: s, pose: age < t.celebrateMs ? 'done' : 'finished' })
     }
   }
-  const newest = (a: StripItem, b: StripItem) => b.session.changedAt - a.session.changedAt
-  return [...working.sort(newest), ...waiting.sort(newest), ...done.sort(newest)]
+  return out.sort((a, b) => POSE_ORDER.indexOf(a.pose) - POSE_ORDER.indexOf(b.pose) || b.session.changedAt - a.session.changedAt)
+}
+
+/**
+ * What the strip draws when there are more than `max`: the needs-you and
+ * working ones (as many as `fit`), the rest counted; else the first `fit`.
+ */
+export function stripShown(items: readonly StripItem[], fit: number, max = 6, least = 1): { shown: StripItem[]; more: number } {
+  const pool = items.length > max ? items.filter(i => i.pose === 'needs' || i.pose === 'working') : [...items]
+  const shown = pool.slice(0, Math.max(least, fit))
+  return { shown, more: items.length - shown.length }
+}
+
+/** A working time as the pill says it: "<1m", "12m", "2h"; it changes on the minute, then the hour. */
+export const workingFor = (ms: number): string => (ms < 60_000 ? '<1m' : ms < 3_600_000 ? `${Math.floor(ms / 60_000)}m` : `${Math.floor(ms / 3_600_000)}h`)
+
+/** When a working pill's words next change. */
+const workingDue = (since: number, at: number): number => {
+  const age = Math.max(0, at - since)
+  const step = age < 3_600_000 ? 60_000 : 3_600_000
+  return since + (Math.floor(age / step) + 1) * step
+}
+
+/** The pill's words: "working 12m", "needs you", "idle", "done ✓" or "done · PR #226". */
+export function pillText(i: StripItem, at: number): string {
+  if (i.pose === 'working') return `working ${workingFor(at - i.session.changedAt)}`
+  if (i.pose === 'needs') return 'needs you'
+  if (i.pose === 'idle') return 'idle'
+  const pr = /PR #\d+/.exec(i.session.note ?? '')?.[0]
+  return pr ? `done · ${pr}` : 'done ✓'
+}
+
+/** "4 sessions · 2 working · 1 needs you · 1 done", or the counts alone. */
+export function stripSummary(items: readonly StripItem[], isNarrow: boolean): string {
+  const n = (...p: StripPose[]) => items.filter(i => p.includes(i.pose)).length
+  const parts: [number, string, string][] = [
+    [n('working'), 'working', '●'],
+    [n('needs'), 'needs you', '!'],
+    [n('idle'), 'idle', 'z'],
+    [n('done', 'finished'), 'done', '✓'],
+  ]
+  const shown = parts.filter(([c]) => c > 0)
+  if (isNarrow) return shown.map(([c, , glyph]) => `${glyph} ${c}`).join('  ')
+  return [`${items.length} session${items.length === 1 ? '' : 's'}`, ...shown.map(([c, word]) => `${c} ${word}`)].join(' · ')
 }
 
 /** When the strip next changes by the clock alone (a celebration ending, a hold running out), or null. */
 export function nextStripChange(items: readonly StripItem[], at: number, t = STRIP_TIMES): number | null {
   let soonest: number | null = null
   for (const { session: s, pose } of items) {
+    const ended = s.endedAt ?? at
     const due =
-      pose === 'done' ? (s.endedAt ?? at) + t.celebrateMs : pose === 'finished' ? (s.endedAt ?? at) + t.holdMs : pose === 'waiting' ? s.changedAt + t.idleMs : null
+      pose === 'done' ? ended + t.celebrateMs
+      : pose === 'finished' ? ended + t.holdMs
+      : pose === 'needs' ? s.changedAt + t.needsMs
+      : pose === 'idle' ? s.changedAt + t.idleMs
+      : pose === 'working' ? workingDue(s.changedAt, at)
+      : null
     if (due !== null && due > at && (soonest === null || due < soonest)) soonest = due
   }
   return soonest

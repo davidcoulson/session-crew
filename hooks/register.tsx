@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CrewImport, CrewPanel, CrewSession, CrewStatus } from '../types'
 import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
+import { CSS, FONT, PILL_COLOR, cardOf, layoutStrip, xml } from './band'
 import {
   assignCostumes,
   describeFilter,
@@ -12,7 +13,14 @@ import {
   listedToPatch,
   missingAsArchived,
   nextStripChange,
+  assignLabels,
+  writtenFor,
+  labelPrompt,
+  parseLabels,
+  pillText,
   stripItems,
+  stripShown,
+  stripSummary,
   normalizeListed,
   parseFaceRules,
   parseImportArgs,
@@ -36,6 +44,8 @@ const importing = atom({ plugin: 'session-crew', key: 'importing' } as const, nu
 const stripOn = atom({ plugin: 'session-crew', key: 'stripOn' } as const, true)
 const lastPromptAt = atom({ plugin: 'session-crew', key: 'lastPromptAt' } as const, 0)
 const bandNow = atom({ plugin: 'session-crew', key: 'bandNow' } as const, 0)
+const labels = atom({ plugin: 'session-crew', key: 'labels' } as const, {})
+const written = atom({ plugin: 'session-crew', key: 'written' } as const, {})
 
 const PANE = 'session-crew'
 const TITLE = 'Session crew'
@@ -51,6 +61,8 @@ const STORE_FACES = 'session-crew.faces'
 const STORE_IMPORT = 'session-crew.import'
 const STORE_COSTUMES = 'session-crew.costumes'
 const STORE_STRIP = 'session-crew.strip'
+const STORE_LABELS = 'session-crew.labels'
+const STORE_WRITTEN = 'session-crew.writtenLabels'
 // A refresh on each prompt, at most this often.
 const PROMPT_REFRESH_MS = 15_000
 // After a failed fetch, wait this long before the timer or a prompt tries again.
@@ -227,6 +239,52 @@ async function rulesNow($: EngineInterface, optionRules: [string, string][]): Pr
   return [...Object.entries(await read($, faces)), ...optionRules]
 }
 
+// Labels set with /crew label win over the `labels` option.
+async function labelRulesNow($: EngineInterface, optionRules: [string, string][]): Promise<[string, string][]> {
+  return [...Object.entries(await read($, labels)), ...optionRules]
+}
+
+// Short labels the model writes from titles, once per session, kept in $.store.
+// Module state: one call at a time, and an id asked once per load is not asked again.
+let labelling = false
+// Tries per session id this load: a label that came back too long is asked once more.
+const askedLabels = new Map<string, number>()
+
+async function readWritten($: EngineInterface): Promise<Record<string, string>> {
+  const stored = (await $.store.get(STORE_WRITTEN)) as Record<string, string> | undefined
+  return stored && typeof stored === 'object' ? stored : {}
+}
+
+async function writeLabels($: EngineInterface): Promise<void> {
+  // Taken before any await, so two ticks never pick the same sessions.
+  if (labelling) return
+  labelling = true
+  try {
+    // Another session's panel may have written labels since this one loaded: take them first.
+    const have = await update($, written, w => w)
+    const stored = await readWritten($)
+    const known = { ...stored, ...have }
+    if (Object.keys(stored).some(id => !have[id])) await update($, written, w => ({ ...stored, ...w }))
+    const todo = (await read($, crew)).filter(s => s.title && !writtenFor(s, known) && (askedLabels.get(s.id) ?? 0) < 2).slice(0, 20)
+    if (!todo.length) return
+    for (const s of todo) askedLabels.set(s.id, (askedLabels.get(s.id) ?? 0) + 1)
+    const r = await $.model.complete({ model: 'haiku', prompt: labelPrompt(todo), maxTokens: 600, effort: 'low' })
+    if (!r.isAnswered) return
+    const got = parseLabels(r.text, todo.map(s => s.id))
+    if (!Object.keys(got).length) return
+    await update($, written, w => ({ ...w, ...got }))
+    // Merged with what the store holds now, then the newest 500 kept.
+    const all = { ...(await readWritten($)), ...(await read($, written)) }
+    const ids = Object.keys(all)
+    for (const id of ids.slice(0, Math.max(0, ids.length - 500))) delete all[id]
+    await $.store.set(STORE_WRITTEN, all)
+  } catch {
+    // No label from the model: the title's own short form stands.
+  } finally {
+    labelling = false
+  }
+}
+
 async function togglePane($: EngineInterface): Promise<boolean> {
   if ((await $.ui.panes()).some(p => p.id === PANE)) {
     await $.ui.close({ id: PANE })
@@ -243,19 +301,12 @@ const sorted = (list: CrewSession[]): CrewSession[] =>
 // ---------------------------------------------------------------------------
 // Desktop drawing: one SVG per row, animated by CSS alone.
 
-const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
-const xml = (s: string): string =>
-  s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
 
 const fit = (s: string, size: number, maxW: number): string => {
   const max = Math.max(4, Math.floor(maxW / (size * 0.56)))
   return s.length > max ? s.slice(0, max - 1) + '…' : s
 }
 
-const CSS = `<style>
-.t{fill:#1f1f1f}.s{fill:#6b6b68}.ln{stroke:#e4e4e1}
-@media (prefers-color-scheme: dark){.t{fill:#ececec}.s{fill:#a8a8a4}.ln{stroke:#333331}}
-</style>`
 
 const svg = (W: number, H: number, body: string): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${CSS}${CRAB_CSS}${body}</svg>`
@@ -289,31 +340,6 @@ function stripSvg(W: number, list: CrewSession[], costumeOf: Map<string, string>
   )
 }
 
-// --- the strip above the prompt: one small crab per session, a name under it.
-
-const CELL = 58
-const STRIP_H = 46
-
-function bandSvg(W: number, items: StripItem[], costumeOf: Map<string, string>): { source: string; shown: number } {
-  const fitN = Math.max(1, Math.floor((W - 34) / CELL))
-  const shown = items.length > fitN ? items.slice(0, fitN - 1) : items
-  const more = items.length - shown.length
-  const cells = shown
-    .map(({ session: s, pose }, i) => {
-      const x = i * CELL
-      return (
-        crab(x + (CELL - 30 * 0.95) / 2, 1, costumeOf.get(s.id) ?? 'other', pose, 0.95) +
-        `<text class="${pose === 'working' ? 't' : 's'}" x="${x + CELL / 2}" y="${STRIP_H - 3}" text-anchor="middle" font-family="${FONT}" font-size="9.5"${pose === 'working' ? ' font-weight="600"' : ''}>${xml(fit(s.name, 9.5, CELL - 4))}</text>`
-      )
-    })
-    .join('')
-  const plus = more ? `<text class="s" x="${shown.length * CELL + 6}" y="${STRIP_H / 2 + 2}" font-family="${FONT}" font-size="12">+${more}</text>` : ''
-  return { source: svg(Math.max(CELL, shown.length * CELL + (more ? 34 : 0)), STRIP_H, cells + plus), shown: shown.length }
-}
-
-const POSE_WORD: Record<StripItem['pose'], string> = { working: 'working', waiting: 'waiting on you', done: 'just finished', finished: 'finished' }
-const POSE_GLYPH: Record<StripItem['pose'], string> = { working: '', waiting: '!', done: '✦', finished: '✓' }
-
 // What the band was last asked to draw, for /crew debug: the desktop Code tab's
 // band is the open question this answers. A module variable: a render hook may
 // not write state, and this is diagnostics only.
@@ -341,11 +367,22 @@ export const register: Register = (on, options) => {
   const pollMs = Math.max(0, Number(options.pollSeconds ?? 30)) * 1000
   const autoOpen = options.autoOpen !== false
   const stripDefault = options.strip !== false
+  const labelRules = parseFaceRules(options.labels as readonly string[] | string | undefined)
+  const stripScale = Math.max(0.8, Math.min(2.5, Number(options.stripScale ?? 1.5) || 1.5))
+  const aiLabels = options.aiLabels !== false
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const stored = (await $.store.get(STORE_FACES)) as Record<string, string> | undefined
     if (stored && typeof stored === 'object') await update($, faces, () => ({ ...stored }))
+    const storedLabels = (await $.store.get(STORE_LABELS)) as Record<string, string> | undefined
+    if (storedLabels && typeof storedLabels === 'object') await update($, labels, () => ({ ...storedLabels }))
+    const storedWritten = (await $.store.get(STORE_WRITTEN)) as Record<string, string> | undefined
+    if (storedWritten && typeof storedWritten === 'object') await update($, written, () => ({ ...storedWritten }))
+    // New sessions get their short label a moment after they join.
+    if (aiLabels) {
+      $.clock.every(5_000, () => void writeLabels($))
+    }
     const strip = await $.store.get(STORE_STRIP)
     await update($, stripOn, () => (typeof strip === 'boolean' ? strip : stripDefault))
     const imp = (await $.store.get(STORE_IMPORT)) as CrewImport | null | undefined
@@ -427,7 +464,8 @@ export const register: Register = (on, options) => {
         const at = await $.clock.now()
         const items = stripItems(await read($, crew), await read($, bandNow), await read($, lastPromptAt))
         const due = nextStripChange(items, await read($, bandNow))
-        // The terminal's spinners are frames of this clock; the desktop's crabs walk by CSS and need no tick.
+        // The terminal's spinners are frames of this clock; the desktop's crabs walk by CSS and need no tick
+        // (its "working 12m" pills are due changes, which nextStripChange counts).
         const spins = bandLog.surface !== undefined && bandLog.surface !== 'desktop' && items.some(i => i.pose === 'working')
         if (spins || (due !== null && at >= due)) await update($, bandNow, () => at)
       })()
@@ -524,6 +562,26 @@ export const register: Register = (on, options) => {
       showStatus($, await read($, crew))
       return { text: 'Cleared finished sessions from the crew.' }
     }
+    if (sub === 'label') {
+      const [pattern, ...words] = rest
+      if (!pattern) return { text: 'Usage: /crew label <name-or-glob> <label>  (no label removes the rule)' }
+      const label = words.join(' ')
+      const next = await update($, labels, l => {
+        const copy = { ...l }
+        if (label) copy[pattern] = label
+        else delete copy[pattern]
+        return copy
+      })
+      await $.store.set(STORE_LABELS, next)
+      return { text: label ? `${pattern} is labelled "${label}".` : `${pattern} takes its short title again.` }
+    }
+    if (sub === 'labels') {
+      const list = await read($, crew)
+      const rules = await labelRulesNow($, labelRules)
+      const shown = assignLabels(list, rules, await read($, written))
+      const lines = [...rules.map(([p, l]) => `rule  ${p} = ${l}`), ...list.map(s => `crew  ${s.name}: ${shown.get(s.id)}`)]
+      return { text: lines.length ? lines.join('\n') : 'No crew or rules yet.' }
+    }
     if (sub === 'strip') {
       const want = rest[0] === 'on' ? true : rest[0] === 'off' ? false : !(await read($, stripOn))
       await update($, stripOn, () => want)
@@ -587,7 +645,14 @@ export const register: Register = (on, options) => {
     // `debug`: what /crew debug shows of the strip and polling, for diagnosing a session from the model's side.
     if (input.debug === true)
       return {
-        result: JSON.stringify({ crew: list.length, poll: await read($, poll), panes: await $.ui.panes(), strip: { isOn: await read($, stripOn), band: bandLog, pane: paneLog } }),
+        result: JSON.stringify({
+          crew: list.length,
+          poll: await read($, poll),
+          panes: await $.ui.panes(),
+          strip: { isOn: await read($, stripOn), band: bandLog, pane: paneLog },
+          labels: Object.fromEntries([...assignLabels(list, await labelRulesNow($, labelRules), await read($, written))].slice(0, 12).map(([id, l]) => [list.find(s => s.id === id)?.name ?? id, l])),
+          writtenLabels: Object.keys(await read($, written)).length,
+        }),
       }
     return { result: `ok: ${list.length} in the crew` }
   })
@@ -661,44 +726,63 @@ export const register: Register = (on, options) => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const costumeOf = assignCostumes(all, await rulesNow($, optionRules))
-    const summary = items.map(i => `${i.session.name} ${POSE_WORD[i.pose]}`).join(', ')
-    const open = <Button key="session-crew-open" label={`crew ${items.length}`} plain onPress={() => void togglePane($)} />
-    const mine =
-      e.surface === 'desktop' && 'Svg' in ui
-        ? (() => {
-            const { Svg } = ui
-            const W = Math.max(160, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 90))
-            const { source } = bandSvg(W, items, costumeOf)
-            const width = Number(/width="(\d+(?:\.\d+)?)"/.exec(source)?.[1] ?? W)
-            bandLog.drew = items.length
-            return (
-              <Box key="session-crew-strip" flexDirection="row" alignItems="center" gap={1}>
-                <Svg source={source} alt={summary} width={width} height={STRIP_H} />
-                {open}
-              </Box>
-            )
-          })()
-        : (() => {
-            const room = Math.max(1, Math.floor(((e.props.bodyColumns || 80) - 10) / 14))
-            const shown = items.slice(0, room)
-            bandLog.drew = shown.length
-            return (
-              <Box key="session-crew-strip" flexDirection="row" gap={1}>
-                {shown.map(({ session: s, pose }) => (
-                  <Text key={s.id} wrap="truncate-end">
-                    <Text color={COSTUME_COLOR[costumeOf.get(s.id) ?? 'other']}>▣</Text>
-                    <Text color={pose === 'waiting' ? '#D85A30' : pose === 'working' ? undefined : '#3B9C5F'}>{pose === 'working' ? frame(s, at) : POSE_GLYPH[pose]}</Text>
-                    <Text dimColor={pose !== 'working'}>{s.name.slice(0, 10)}</Text>
-                  </Text>
-                ))}
-                {items.length > shown.length && <Text dimColor>+{items.length - shown.length}</Text>}
-                {open}
-              </Box>
-            )
-          })()
+    const labelOf = assignLabels(all, await labelRulesNow($, labelRules), await read($, written))
+    const label = (s: CrewSession) => labelOf.get(s.id) ?? s.name
+
+    if (e.surface === 'desktop' && 'Svg' in ui) {
+      const { Svg } = ui
+      const W = Math.max(200, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 16))
+      const { band, summary, shown } = layoutStrip(W, items, i => cardOf(i, label(i.session), costumeOf.get(i.session.id) ?? 'other', at, stripScale), stripScale, isNarrow =>
+        stripSummary(items, isNarrow),
+      )
+      bandLog.drew = shown
+      const alt = items.map(i => `${label(i.session)}: ${pillText(i, at)}`).join(', ')
+      return (
+        <Box flexDirection="column">
+          <Box key="session-crew-strip" flexDirection="row" alignItems="center" gap={1}>
+            <Svg source={band.source} alt={alt} width={band.width} height={band.height} isInteractive />
+            <Button key="session-crew-open" label={summary} plain onPress={() => void togglePane($)} />
+          </Box>
+          {below}
+        </Box>
+      )
+    }
+
+    // Terminal: the same cards in text, `▣ Label` and a coloured pill in words, sized to the
+    // columns with room kept for the summary and the "+N more" (gaps of 2 between them).
+    const cols = e.props.bodyColumns || 80
+    const textCard = (i: StripItem) => 2 + label(i.session).length + 3 + pillText(i, at).length + 2
+    const fitTerminal = (isNarrow: boolean) => {
+      const summary = stripSummary(items, isNarrow)
+      let used = summary.length + 2
+      let fit = 0
+      for (const i of items) {
+        const moreRoom = fit + 1 < items.length ? 12 : 0
+        if (used + textCard(i) + moreRoom > cols) break
+        used += textCard(i)
+        fit++
+      }
+      return { summary, ...stripShown(items, fit, 6, isNarrow ? 0 : 1) }
+    }
+    const wide = fitTerminal(false)
+    const terminal = wide.more === 0 ? wide : fitTerminal(true)
+    const { shown, more } = terminal.shown.length >= wide.shown.length ? terminal : wide
+    const termSummary = terminal.shown.length >= wide.shown.length ? terminal.summary : wide.summary
+    bandLog.drew = shown.length
     return (
       <Box flexDirection="column">
-        {mine}
+        <Box key="session-crew-strip" flexDirection="row" gap={2}>
+          {shown.map(i => (
+            <Text key={i.session.id} wrap="truncate-end">
+              <Text color={COSTUME_COLOR[costumeOf.get(i.session.id) ?? 'other']}>▣</Text> <Text bold={i.pose !== 'finished'} dimColor={i.pose === 'finished'}>{label(i.session)}</Text>{' '}
+              <Text color={PILL_COLOR[i.pose]} bold={i.pose === 'needs'} inverse={i.pose === 'needs'}>
+                {i.pose === 'working' ? frame(i.session, at) : i.pose === 'needs' ? ' !' : i.pose === 'idle' ? 'z' : '✓'} {pillText(i, at)}{i.pose === 'needs' ? ' ' : ''}
+              </Text>
+            </Text>
+          ))}
+          {more > 0 && <Text dimColor>+{more} more</Text>}
+          <Button key="session-crew-open" label={termSummary} plain onPress={() => void togglePane($)} />
+        </Box>
         {below}
       </Box>
     )
