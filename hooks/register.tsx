@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CrewImport, CrewPanel, CrewSession, CrewStatus } from '../types'
 import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
-import { CSS, FONT, PILL_COLOR, TERM_GAP, cardOf, fitTerminalRow, layoutStrip, termCardCells, xml } from './band'
+import { CSS, FONT, MAIN_ROW_H, PILL_COLOR, SLEEP_ROW_H, TERM_GAP, cardOf, fitTerminalRow, layoutStrip, mainRowSvg, sleepRowSvg, termCardCells, xml } from './band'
 import {
   assignCostumes,
   describeFilter,
@@ -13,11 +13,18 @@ import {
   listedToPatch,
   missingAsArchived,
   nextStripChange,
+  STRIP_TIMES,
   assignLabels,
   writtenFor,
   labelPrompt,
   parseLabels,
   pillText,
+  isHiddenBy,
+  isArchivedRow,
+  paneGroups,
+  nextPaneChange,
+  paneRowText,
+  prOf,
   stripItems,
   stripShown,
   stripSummary,
@@ -28,14 +35,14 @@ import {
   parsePromptText,
   parseStartResult,
   selectForImport,
-  timeLabel,
+  fmtAgo,
   upsertAll,
 } from './parse'
 import { mergeBooks } from './parse'
-import type { CostumeBook, Listed, Patch, StripItem } from './parse'
+import type { CostumeBook, Listed, PaneKind, PaneRow, Patch, StripItem } from './parse'
 
 const crew = atom({ plugin: 'session-crew', key: 'crew' } as const, [])
-const panel = atom({ plugin: 'session-crew', key: 'panel' } as const, { isCompact: false, isDoneHidden: false })
+const panel = atom({ plugin: 'session-crew', key: 'panel' } as const, { isCompact: false, isDoneHidden: true, isSleepingShown: false })
 const poll = atom({ plugin: 'session-crew', key: 'poll' } as const, { isAvailable: true, lastAt: 0 })
 const now = atom({ plugin: 'session-crew', key: 'now' } as const, 0)
 const faces = atom({ plugin: 'session-crew', key: 'faces' } as const, {})
@@ -45,6 +52,7 @@ const stripOn = atom({ plugin: 'session-crew', key: 'stripOn' } as const, true)
 const lastPromptAt = atom({ plugin: 'session-crew', key: 'lastPromptAt' } as const, 0)
 const bandNow = atom({ plugin: 'session-crew', key: 'bandNow' } as const, 0)
 const labels = atom({ plugin: 'session-crew', key: 'labels' } as const, {})
+const hidden = atom({ plugin: 'session-crew', key: 'hidden' } as const, [])
 const written = atom({ plugin: 'session-crew', key: 'written' } as const, {})
 
 const PANE = 'session-crew'
@@ -62,6 +70,8 @@ const STORE_IMPORT = 'session-crew.import'
 const STORE_COSTUMES = 'session-crew.costumes'
 const STORE_STRIP = 'session-crew.strip'
 const STORE_LABELS = 'session-crew.labels'
+const STORE_HIDDEN = 'session-crew.hidden'
+const STORE_SLEEPING = 'session-crew.sleeping'
 const STORE_WRITTEN = 'session-crew.writtenLabels'
 // A refresh on each prompt, at most this often.
 const PROMPT_REFRESH_MS = 15_000
@@ -239,6 +249,12 @@ async function rulesNow($: EngineInterface, optionRules: [string, string][]): Pr
   return [...Object.entries(await read($, faces)), ...optionRules]
 }
 
+// The crew less what hide rules (the hidePatterns option and /crew hide) leave out of the pane and the strip.
+async function visibleCrew($: EngineInterface, optionHide: readonly string[]): Promise<CrewSession[]> {
+  const patterns = [...optionHide, ...(await read($, hidden))]
+  return (await read($, crew)).filter(s => !isHiddenBy(s, patterns))
+}
+
 // Labels set with /crew label win over the `labels` option.
 async function labelRulesNow($: EngineInterface, optionRules: [string, string][]): Promise<[string, string][]> {
   return [...Object.entries(await read($, labels)), ...optionRules]
@@ -295,6 +311,9 @@ async function togglePane($: EngineInterface): Promise<boolean> {
   return true
 }
 
+// A folded finished row's words: a withdrawn proposal says so, never "done".
+const finishedText = (s: CrewSession): string => (s.status === 'dismissed' ? 'dismissed' : prOf(s) ? `done · ${prOf(s)}` : 'done')
+
 const sorted = (list: CrewSession[]): CrewSession[] =>
   [...list].sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || b.changedAt - a.changedAt)
 
@@ -310,23 +329,6 @@ const fit = (s: string, size: number, maxW: number): string => {
 
 const svg = (W: number, H: number, body: string): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${CSS}${CRAB_CSS}${body}</svg>`
-
-function rowSvg(W: number, s: CrewSession, costume: string, at: number): string {
-  const right = `${WORD[s.status]} · ${timeLabel(s, at)}`
-  const rightW = right.length * 6.4
-  const textW = W - 48 - rightW - 12
-  const sub = [s.title, s.note].filter(Boolean).join(' · ')
-  return svg(
-    W,
-    56,
-    `${crab(2, 14, costume, s.status)}
-<text class="t" x="48" y="23" font-family="${FONT}" font-size="13" font-weight="600">${xml(fit(s.name, 13, textW))}</text>
-<text class="s" x="48" y="40" font-family="${FONT}" font-size="11">${xml(fit(sub, 11, W - 48))}</text>
-<circle cx="${W - rightW - 8}" cy="19" r="3.5" fill="${COLOR[s.status]}"/>
-<text class="s" x="${W}" y="23" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(right)}</text>
-<line class="ln" x1="0" y1="55.5" x2="${W}" y2="55.5"/>`,
-  )
-}
 
 function stripSvg(W: number, list: CrewSession[], costumeOf: Map<string, string>): string {
   const fitN = Math.max(1, Math.floor((W - 30) / 38))
@@ -370,11 +372,19 @@ export const register: Register = (on, options) => {
   const labelRules = parseFaceRules(options.labels as readonly string[] | string | undefined)
   const stripScale = Math.max(0.8, Math.min(2.5, Number(options.stripScale ?? 1.5) || 1.5))
   const aiLabels = options.aiLabels !== false
+  const optionHide = (Array.isArray(options.hidePatterns) ? options.hidePatterns : typeof options.hidePatterns === 'string' ? options.hidePatterns.split(/[,\n]/) : [])
+    .map(p => String(p).trim())
+    .filter(Boolean)
+  const recentMs = Math.max(1, Number(options.recentMinutes ?? 30) || 30) * 60_000
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const stored = (await $.store.get(STORE_FACES)) as Record<string, string> | undefined
     if (stored && typeof stored === 'object') await update($, faces, () => ({ ...stored }))
+    const storedHidden = await $.store.get(STORE_HIDDEN)
+    if (Array.isArray(storedHidden)) await update($, hidden, () => storedHidden.filter((p): p is string => typeof p === 'string'))
+    const storedSleeping = await $.store.get(STORE_SLEEPING)
+    if (typeof storedSleeping === 'boolean') await update($, panel, v => ({ ...v, isSleepingShown: storedSleeping }))
     const storedLabels = (await $.store.get(STORE_LABELS)) as Record<string, string> | undefined
     if (storedLabels && typeof storedLabels === 'object') await update($, labels, () => ({ ...storedLabels }))
     const storedWritten = (await $.store.get(STORE_WRITTEN)) as Record<string, string> | undefined
@@ -462,7 +472,8 @@ export const register: Register = (on, options) => {
       void (async () => {
         if (!(await read($, stripOn))) return
         const at = await $.clock.now()
-        const items = stripItems(await read($, crew), await read($, bandNow), await read($, lastPromptAt))
+        // Hidden sessions never draw, so they never tick it.
+        const items = stripItems(await visibleCrew($, optionHide), await read($, bandNow), await read($, lastPromptAt))
         const due = nextStripChange(items, await read($, bandNow))
         // The terminal's spinners are frames of this clock; the desktop's crabs walk by CSS and need no tick
         // (its "working 12m" pills are due changes, which nextStripChange counts).
@@ -471,13 +482,17 @@ export const register: Register = (on, options) => {
       })()
     })
 
-    // Elapsed times and terminal frames, only while the pane is up and someone is busy or asleep.
+    // The pane's clock: ticks when something it shows is due to change (an elapsed time's words, a
+    // row moving between groups), or each second for the terminal's spinners; only while the pane is up.
     $.clock.every(1000, () => {
       void (async () => {
-        const list = await read($, crew)
-        if (!list.some(s => s.status === 'working' || s.status === 'idle')) return
-        if (!(await $.ui.panes()).some(p => p.id === PANE)) return
         const at = await $.clock.now()
+        const shownAt = await read($, now)
+        const groups = paneGroups(await visibleCrew($, optionHide), shownAt, { needsMs: STRIP_TIMES.needsMs, recentMs })
+        const due = nextPaneChange(groups, shownAt, (await read($, panel)).isSleepingShown === true, { needsMs: STRIP_TIMES.needsMs, recentMs })
+        const spins = paneLog.surface !== undefined && paneLog.surface !== 'desktop' && groups.main.some(r => r.kind === 'working')
+        if (!spins && (due === null || at < due)) return
+        if (!(await $.ui.panes()).some(p => p.id === PANE)) return
         await update($, now, () => at)
       })()
     })
@@ -561,6 +576,26 @@ export const register: Register = (on, options) => {
       await update($, crew, l => l.filter(s => s.status !== 'done' && s.status !== 'dismissed'))
       showStatus($, await read($, crew))
       return { text: 'Cleared finished sessions from the crew.' }
+    }
+    if (sub === 'sleeping') {
+      const want = rest[0] === 'show' ? true : rest[0] === 'hide' ? false : !(await read($, panel)).isSleepingShown
+      await update($, panel, v => ({ ...v, isSleepingShown: want }))
+      await $.store.set(STORE_SLEEPING, want)
+      return { text: want ? 'Sleeping sessions: shown in the pane.' : 'Sleeping sessions: folded into one row.' }
+    }
+    if (sub === 'hide') {
+      const pattern = rest.join(' ')
+      if (!pattern) return { text: `Usage: /crew hide <name-or-glob>. Hidden now: ${[...optionHide, ...(await read($, hidden))].join(', ') || 'nothing'}` }
+      const next = await update($, hidden, h => (h.includes(pattern) ? h : [...h, pattern]))
+      await $.store.set(STORE_HIDDEN, next)
+      return { text: `Hiding ${pattern} from the pane and the strip. /crew unhide ${pattern} brings it back.` }
+    }
+    if (sub === 'unhide') {
+      const pattern = rest.join(' ')
+      const next = await update($, hidden, h => (pattern ? h.filter(p => p !== pattern) : []))
+      await $.store.set(STORE_HIDDEN, next)
+      const left = optionHide.length ? ` (the hidePatterns option still hides ${optionHide.join(', ')})` : ''
+      return { text: (pattern ? `${pattern} shows again.` : 'Every /crew hide rule removed.') + left }
     }
     if (sub === 'label') {
       const [pattern, ...words] = rest
@@ -718,9 +753,12 @@ export const register: Register = (on, options) => {
     bandLog.maxRows = e.props.maxRows
     if (e.props.hasSurvey || !(await read($, stripOn))) return next(e)
     const all = await read($, crew)
+    const shownCrew = await visibleCrew($, optionHide)
     const at = Math.max(await read($, bandNow), await read($, now), ...all.map(s => s.changedAt), 0)
-    const items = stripItems(all, at, await read($, lastPromptAt))
+    const items = stripItems(shownCrew, at, await read($, lastPromptAt))
     if (!items.length) return next(e)
+    // Sleeping sessions are only a count in the summary.
+    const sleepingCount = paneGroups(shownCrew, at, { needsMs: STRIP_TIMES.needsMs, recentMs }).sleeping.length
     const below = await next(e)
     bandLog.below = JSON.stringify(below).slice(0, 160)
     const ui = $.ui.resolve(e)
@@ -733,7 +771,7 @@ export const register: Register = (on, options) => {
       const { Svg } = ui
       const W = Math.max(200, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 16))
       const { band, summary, shown } = layoutStrip(W, items, i => cardOf(i, label(i.session), costumeOf.get(i.session.id) ?? 'other', at, stripScale), stripScale, isNarrow =>
-        stripSummary(items, isNarrow),
+        stripSummary(items, isNarrow, sleepingCount),
       )
       bandLog.drew = shown
       const alt = items.map(i => `${label(i.session)}: ${pillText(i, at)}`).join(', ')
@@ -755,7 +793,7 @@ export const register: Register = (on, options) => {
       items,
       cols,
       i => termCardCells(i.pose, label(i.session), pillText(i, at)),
-      isNarrow => stripSummary(items, isNarrow),
+      isNarrow => stripSummary(items, isNarrow, sleepingCount),
     )
     bandLog.drew = shown.length
     return (
@@ -784,37 +822,61 @@ export const register: Register = (on, options) => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const all = await read($, crew)
-    const list = sorted(all)
+    const shownCrew = await visibleCrew($, optionHide)
     const p: CrewPanel = await read($, panel)
     const pl = await read($, poll)
-    const at = Math.max(await read($, now), ...list.map(s => s.changedAt), 0)
+    const at = Math.max(await read($, now), ...all.map(s => s.changedAt), 0)
     // Faces from the crew in the order it joined, never the panel's status order,
     // so a session changing state never swaps crabs with another.
     const costumeOf = assignCostumes(all, await rulesNow($, optionRules))
     const costume = (s: CrewSession) => costumeOf.get(s.id) ?? 'other'
-    const finished = list.filter(s => s.status === 'done' || s.status === 'dismissed')
-    const active = list.filter(s => s.status !== 'done' && s.status !== 'dismissed')
-    const shown = p.isDoneHidden ? active : list
+    const labelOf = assignLabels(all, await labelRulesNow($, labelRules), await read($, written))
+    const label = (s: CrewSession) => labelOf.get(s.id) ?? s.name
+    const { main, sleeping, finished } = paneGroups(shownCrew, at, { needsMs: STRIP_TIMES.needsMs, recentMs })
+    const isSleepingShown = p.isSleepingShown === true
+    const isFinishedShown = p.isDoneHidden === false
 
+    const sleepToggle =
+      sleeping.length > 0 ? (
+        <Button
+          key="sleeping"
+          label={`${isSleepingShown ? '▾' : '▸'} ${sleeping.length} sleeping · ${isSleepingShown ? 'hide' : 'show'}`}
+          plain
+          onPress={() =>
+            void (async () => {
+              const v = await update($, panel, x => ({ ...x, isSleepingShown: !x.isSleepingShown }))
+              await $.store.set(STORE_SLEEPING, v.isSleepingShown === true)
+            })()
+          }
+        />
+      ) : null
+    const finishedToggle =
+      finished.length > 0 ? (
+        <Button
+          key="done"
+          label={`${isFinishedShown ? '▾' : '▸'} ${finished.length} finished · ${isFinishedShown ? 'hide' : 'show'}`}
+          plain
+          onPress={() => update($, panel, x => ({ ...x, isDoneHidden: x.isDoneHidden === false }))}
+        />
+      ) : null
     const controls = (
       <Box key="controls" flexDirection="row" gap={2}>
         <Button key="compact" label={p.isCompact ? 'Rows' : 'Crabs only'} plain onPress={() => update($, panel, v => ({ ...v, isCompact: !v.isCompact }))} />
-        {finished.length > 0 && (
-          <Button
-            key="done"
-            label={`${p.isDoneHidden ? '▸' : '▾'} finished · ${finished.length}`}
-            plain
-            onPress={() => update($, panel, v => ({ ...v, isDoneHidden: !v.isDoneHidden }))}
-          />
-        )}
         <Button key="refresh" label="Refresh" plain onPress={() => void refresh($)} />
       </Box>
     )
+    const isEmpty = shownCrew.every(isArchivedRow)
     const empty = (
       <Text key="empty" dimColor>
         No side sessions yet. They appear when this session starts or proposes one, or when the app reports linked sessions; /crew import brings in ones that already exist.
       </Text>
     )
+    const quiet =
+      !isEmpty && main.length === 0 ? (
+        <Text key="quiet" dimColor>
+          Nobody is working or waiting on you.
+        </Text>
+      ) : null
     const pollNote = !pl.isAvailable && pl.lastAt ? (
       <Text key="poll" dimColor>
         Can't list sessions right now ({pl.lastError?.slice(0, 80) ?? 'no answer'}); retrying about once a minute. Updates also arrive with each prompt.
@@ -826,53 +888,98 @@ export const register: Register = (on, options) => {
       const W = Math.max(240, Math.min(900, (e.props.bodyColumns || 40) * 8 - 8))
       return (
         <Box flexDirection="column">
-          {list.length === 0 && empty}
-          {list.length > 0 && p.isCompact && (
-            <Svg key="strip" source={stripSvg(W, shown, costumeOf)} alt={shown.map(s => `${s.name} ${WORD[s.status]}`).join(', ')} width={W} height={40} />
+          {isEmpty && empty}
+          {quiet}
+          {main.length > 0 && p.isCompact && (
+            <Svg key="strip" source={stripSvg(W, main.map(r => r.session), costumeOf)} alt={main.map(r => `${label(r.session)} ${paneRowText(r, at)}`).join(', ')} width={W} height={40} />
           )}
-          {list.length > 0 &&
-            !p.isCompact &&
-            shown.map(s => (
-              <Svg key={s.id} source={rowSvg(W, s, costume(s), at)} alt={`${s.name}, the ${WEARS[costume(s)]} crab: ${WORD[s.status]}, ${timeLabel(s, at)}`} width={W} height={56} />
+          {!p.isCompact &&
+            main.map(r => (
+              <Svg
+                key={r.session.id}
+                source={mainRowSvg(W, r, label(r.session), costume(r.session), at)}
+                alt={`${label(r.session)}, the ${WEARS[costume(r.session)]} crab: ${paneRowText(r, at)}`}
+                width={W}
+                height={MAIN_ROW_H}
+                isInteractive
+              />
             ))}
-          {list.length > 0 && controls}
+          {sleepToggle}
+          {isSleepingShown &&
+            sleeping.map(s => (
+              <Svg key={s.id} source={sleepRowSvg(W, s, label(s), costume(s), at)} alt={`${label(s)}: idle ${fmtAgo(at - s.changedAt)}`} width={W} height={SLEEP_ROW_H} isInteractive />
+            ))}
+          {finishedToggle}
+          {isFinishedShown &&
+            finished.map(s => (
+              <Svg
+                key={s.id}
+                source={sleepRowSvg(W, s, label(s), costume(s), at, finishedText(s))}
+                alt={`${label(s)}: ${finishedText(s)}`}
+                width={W}
+                height={SLEEP_ROW_H}
+                isInteractive
+              />
+            ))}
+          {!isEmpty && controls}
           {pollNote}
         </Box>
       )
     }
 
-    // Terminal and the other surfaces: the same rows in text.
+    // Terminal and the other surfaces: the same rows in text; sleeping ones on one line.
+    const KIND_COLOR: Record<PaneKind, string> = { needs: '#D85A30', working: '#378ADD', proposed: '#BA7517', done: '#3B9C5F' }
+    const mainRow = (r: PaneRow) => {
+      const s = r.session
+      const sub = [s.title && s.title !== label(s) ? s.title : '', r.kind !== 'done' ? prOf(s) ?? '' : ''].filter(Boolean).join(' · ')
+      return (
+        <Box key={s.id} flexDirection="column" marginBottom={1}>
+          <Box flexDirection="row" gap={1}>
+            <Text color={COSTUME_COLOR[costume(s)]}>▣</Text>
+            <Text dimColor>{r.kind === 'working' ? frame(s, at) : r.kind === 'needs' ? '!' : r.kind === 'done' ? '✓' : '?'}</Text>
+            <Text bold wrap="truncate-end">
+              {label(s)}
+            </Text>
+            <Text color={KIND_COLOR[r.kind]} bold={r.kind === 'needs'}>
+              {paneRowText(r, at)}
+            </Text>
+          </Box>
+          {sub && (
+            <Text dimColor wrap="truncate-end">
+              {'    '}
+              {sub}
+            </Text>
+          )}
+        </Box>
+      )
+    }
+    const lineRow = (s: CrewSession, right: string) => (
+      <Box key={s.id} flexDirection="row" gap={1}>
+        <Text color={COSTUME_COLOR[costume(s)]}>▣</Text>
+        <Text wrap="truncate-end">{label(s)}</Text>
+        <Text dimColor>{right}</Text>
+      </Box>
+    )
     return (
       <Box flexDirection="column">
-        {list.length === 0 && empty}
+        {isEmpty && empty}
+        {quiet}
         {p.isCompact ? (
           <Text key="strip" wrap="truncate-end">
-            {shown.map(s => (
-              <Text key={s.id} color={COSTUME_COLOR[costume(s)]}>
-                ▣{frame(s, at)}{' '}
+            {main.map(r => (
+              <Text key={r.session.id} color={COSTUME_COLOR[costume(r.session)]}>
+                ▣{frame(r.session, at)}{' '}
               </Text>
             ))}
           </Text>
         ) : (
-          shown.map(s => (
-            <Box key={s.id} flexDirection="column" marginBottom={1}>
-              <Box flexDirection="row" gap={1}>
-                <Text color={COSTUME_COLOR[costume(s)]}>▣</Text>
-                <Text dimColor>{frame(s, at)}</Text>
-                <Text bold wrap="truncate-end">
-                  {s.name}
-                </Text>
-                <Text color={COLOR[s.status]}>{WORD[s.status]}</Text>
-                <Text dimColor>{timeLabel(s, at)}</Text>
-              </Box>
-              <Text dimColor wrap="truncate-end">
-                {'  '}
-                {[WEARS[costume(s)], s.title, s.note].filter(Boolean).join(' · ')}
-              </Text>
-            </Box>
-          ))
+          main.map(mainRow)
         )}
-        {list.length > 0 && controls}
+        {sleepToggle}
+        {isSleepingShown && sleeping.map(s => lineRow(s, `idle ${fmtAgo(at - s.changedAt)}`))}
+        {finishedToggle}
+        {isFinishedShown && finished.map(s => lineRow(s, finishedText(s)))}
+        {!isEmpty && controls}
         {pollNote}
       </Box>
     )

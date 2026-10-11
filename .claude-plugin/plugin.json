@@ -40,6 +40,19 @@
       "description": "How large the strip's crabs draw, 0.8 to 2.5.",
       "default": 1.5
     },
+    "hidePatterns": {
+      "type": "string",
+      "multiple": true,
+      "title": "Hide sessions",
+      "description": "Globs on a session's name, title or id that the pane and the strip leave out (as /crew hide does).",
+      "default": []
+    },
+    "recentMinutes": {
+      "type": "number",
+      "title": "Recently finished (minutes)",
+      "description": "A session that finished within this many minutes stays in the pane's main list; older ones fold into finished.",
+      "default": 30
+    },
     "strip": {
       "type": "boolean",
       "title": "Crab strip above the prompt",

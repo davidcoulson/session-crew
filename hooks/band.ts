@@ -4,8 +4,9 @@
 
 import { CRAB_CSS, crab } from './crab'
 import type { CrabPose } from './crab'
-import { pillText, stripShown } from './parse'
-import type { StripItem, StripPose } from './parse'
+import { fmtAgo, paneRowText, pillText, prOf, stripShown } from './parse'
+import type { PaneRow, StripItem, StripPose } from './parse'
+import type { CrewSession } from '../types'
 
 export const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
 
@@ -46,7 +47,7 @@ export const PILL_CSS = `<style>
 const CRAB_POSE: Record<StripPose, CrabPose> = { needs: 'waiting', working: 'working', idle: 'idle', done: 'done', finished: 'finished' }
 
 // The pill's icon, drawn, in a 10×10 box at (x, y).
-function pillIcon(pose: StripPose, x: number, y: number): string {
+export function pillIcon(pose: StripPose, x: number, y: number): string {
   if (pose === 'working') return `<circle class="ic pulse" cx="${x + 4}" cy="${y + 5}" r="3.2"/>`
   if (pose === 'needs') return `<text class="ic" x="${x + 2.5}" y="${y + 9}" font-family="${FONT}" font-size="11" font-weight="800">!</text>`
   if (pose === 'idle') return `<text class="ic" x="${x + 1}" y="${y + 8.5}" font-family="${FONT}" font-size="10" font-weight="700">z</text>`
@@ -207,4 +208,76 @@ export function clipCells(text: string, max: number): string {
     out += ch
   }
   return max > 0 ? out.trimEnd() + '…' : ''
+}
+
+// --- the pane's rows ----------------------------------------------------------------
+
+/** A status pill, its icon and words, at (x, y), in the strip's colours; returns its markup and width. */
+export function pillSvg(x: number, y: number, pose: StripPose, text: string): { svg: string; width: number } {
+  const width = pillWidth(text)
+  return {
+    svg: `<g class="${PILL_CLASS[pose]}"><rect x="${x}" y="${y}" width="${width}" height="16" rx="8"/>${pillIcon(pose, x + 5, y + 3)}<text x="${x + 17}" y="${y + 11.5}" font-family="${FONT}" font-size="${STRIP_FONT_PILL}" font-weight="600">${xml(text)}</text></g>`,
+    width,
+  }
+}
+
+const KIND_POSE: Record<PaneRow['kind'], StripPose> = { needs: 'needs', working: 'working', proposed: 'idle', done: 'done' }
+const KIND_CRAB: Record<PaneRow['kind'], CrabPose> = { needs: 'waiting', working: 'working', proposed: 'proposed', done: 'finished' }
+
+const clipToWidth = (text: string, size: number, maxW: number, bold = false): string => {
+  if (textW(text, size, bold) <= maxW) return text
+  let out = ''
+  for (const ch of text) {
+    if (textW(out + ch + '…', size, bold) > maxW) break
+    out += ch
+  }
+  return out.trimEnd() + '…'
+}
+
+const paneSvg = (W: number, H: number, body: string): string =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${CSS}${CRAB_CSS}${PILL_CSS}${body}</svg>`
+
+export const MAIN_ROW_H = 52
+export const SLEEP_ROW_H = 28
+
+/** Who a session is, for its hover: the whole title, the handle, and the app's note ("started by …"). */
+export const hoverOf = (s: CrewSession, status: string): string =>
+  `${s.title || s.name} (${s.name})${s.note ? ` · ${s.note}` : ''}: ${status}`
+
+/**
+ * A main row, two lines: the crab, the label, and under it the title (when it
+ * says more than the label) and the PR; the status pill on the right.
+ */
+export function mainRowSvg(W: number, r: PaneRow, label: string, costume: string, at: number): string {
+  const s = r.session
+  const status = paneRowText(r, at)
+  const pose = KIND_POSE[r.kind]
+  const pillW = pillWidth(status)
+  const textMax = W - 46 - pillW - 14
+  const sub = [s.title && s.title !== label ? s.title : '', r.kind !== 'done' ? prOf(s) ?? '' : ''].filter(Boolean).join(' · ')
+  const pill = pillSvg(W - pillW, 9, r.kind === 'done' && at - (s.endedAt ?? at) >= 5_000 ? 'finished' : pose, status)
+  const crabPose: CrabPose = r.kind === 'done' && at - (s.endedAt ?? at) < 5_000 ? 'done' : KIND_CRAB[r.kind]
+  return paneSvg(
+    W,
+    MAIN_ROW_H,
+    `<g><title>${xml(hoverOf(s, status))}</title>
+${crab(2, 12, costume, crabPose)}
+<text class="t" x="46" y="22" font-family="${FONT}" font-size="13" font-weight="600">${xml(clipToWidth(label, 13, textMax, true))}</text>
+<text class="s" x="46" y="39" font-family="${FONT}" font-size="11">${xml(clipToWidth(sub, 11, W - 46 - 4))}</text>
+${pill.svg}
+<line class="ln" x1="0" y1="${MAIN_ROW_H - 0.5}" x2="${W}" y2="${MAIN_ROW_H - 0.5}"/></g>`,
+  )
+}
+
+/** A one-line row: a small resting crab, the label, and on the right "idle 8m" (or `right`: "done · PR #226"). */
+export function sleepRowSvg(W: number, s: CrewSession, label: string, costume: string, at: number, right = `idle ${fmtAgo(at - s.changedAt)}`): string {
+  const rightW = textW(right, 11) + 4
+  return paneSvg(
+    W,
+    SLEEP_ROW_H,
+    `<g><title>${xml(hoverOf(s, right))}</title>
+${crab(4, 3, costume, 'idle', 0.75)}
+<text class="t" x="34" y="18" font-family="${FONT}" font-size="12.5" font-weight="500">${xml(clipToWidth(label, 12.5, W - 34 - rightW - 10))}</text>
+<text class="s" x="${W}" y="18" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(right)}</text></g>`,
+  )
 }

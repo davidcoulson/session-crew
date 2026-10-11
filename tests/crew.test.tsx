@@ -14,6 +14,10 @@ import {
   stripShown,
   stripSummary,
   workingFor,
+  paneGroups,
+  paneRowText,
+  nextPaneChange,
+  isHiddenBy,
   pillText,
   shortLabel,
   clipLabel,
@@ -215,8 +219,8 @@ describe('the strip above the prompt', () => {
       ['busy', 'working'],
       ['finishes', 'done'],
     ])
-    // A quarter of an hour on, it is plain idle (after working), still before done.
-    expect(stripItems(list, 10_000 + 900_001, 900_000, T).map(i => i.pose)).toEqual(['working', 'idle'])
+    // A quarter of an hour on it is asleep: never a crab in the strip (the summary counts it).
+    expect(stripItems(list, 10_000 + 900_001, 900_000, T).map(i => i.pose)).toEqual(['working'])
     // Celebration over: a check mark; still there after a minute while no prompt came.
     expect(stripItems(list, 16_000, 0, T).at(-1)?.pose).toBe('finished')
     expect(stripItems(list, 600_000, 0, T).some(i => i.session.name === 'finishes')).toBe(true)
@@ -353,6 +357,95 @@ describe('labels', () => {
   })
 })
 
+describe('the pane', () => {
+  const P = { needsMs: 900_000, recentMs: 1_800_000 }
+  const id = (n: number) => `local_00000000-0000-0000-0000-0000000000${String(n).padStart(2, '0')}`
+  // Seen working at 0, then each moves at 1_000_000 as given.
+  const crewOf = (rows: [number, string, 'working' | 'idle' | 'done' | 'proposed', string?][], at = 1_000_000) =>
+    upsertAll(upsertAll([], rows.map(([n, name]) => ({ id: id(n), name, status: 'working' as const })), 0, 't'), rows.map(([n, , status, note]) => ({ id: id(n), status, note })), at, 't')
+
+  test('main shows working, needs you and recently finished; the rest fold; archived never shows', () => {
+    let list = crewOf([
+      [1, 'busy', 'working'],
+      [2, 'waits', 'idle'],
+      [3, 'fresh-done', 'done', 'PR #226'],
+      [4, 'old-idle', 'idle'],
+      [5, 'old-done', 'done'],
+    ])
+    // Three of them moved long before: asleep, finished.
+    list = list.map(s => (s.name === 'old-idle' || s.name === 'old-done' ? { ...s, changedAt: -5_000_000, endedAt: s.endedAt === undefined ? undefined : -5_000_000 } : s))
+    // An imported one, first seen idle, and an archived one.
+    list = upsertAll(list, [
+      { id: id(6), name: 'imported', status: 'idle', isImported: true, since: 900_000 },
+      { id: id(7), name: 'archived', status: 'done', note: 'archived', isImported: true },
+    ], 1_000_000, 'import', true)
+    const g = paneGroups(list, 1_100_000, P)
+    expect(g.main.map(r => [r.session.name, r.kind])).toEqual([
+      ['waits', 'needs'],
+      ['busy', 'working'],
+      ['fresh-done', 'done'],
+    ])
+    expect(g.sleeping.map(s => s.name)).toEqual(['imported', 'old-idle'])
+    expect(g.finished.map(s => s.name)).toEqual(['old-done'])
+    expect(paneRowText(g.main[2]!, 1_100_000)).toBe('done · PR #226')
+    expect(paneRowText(g.main[1]!, 1_100_000)).toBe('working · 18m')
+    // Half an hour after it finished, it folds too.
+    expect(paneGroups(list, 1_000_000 + 1_800_001, P).finished.map(s => s.name)).toContain('fresh-done')
+  })
+
+  test('a listed archived session is marked, and unmarked when it comes back', () => {
+    let list = upsertAll([], [listedToPatch({ id: id(1), name: 'a', isArchived: false, isRunning: true })], 0, 'import', true)
+    list = upsertAll(list, [listedToPatch({ id: id(1), isArchived: true })], 1, 'import', true)
+    expect(list[0]?.isArchived).toBe(true)
+    expect(paneGroups(list, 2, P).main.length + paneGroups(list, 2, P).sleeping.length + paneGroups(list, 2, P).finished.length).toBe(0)
+    list = upsertAll(list, [listedToPatch({ id: id(1), isArchived: false, isRunning: false })], 3, 'import', true)
+    expect(list[0]?.isArchived).toBe(undefined)
+    expect(list[0]?.status).toBe('idle')
+  })
+
+  test('unarchived but still done, it shows again; a PR survives the archive', () => {
+    let list = crewOf([[1, 'shipped', 'done', 'PR #226']])
+    list = upsertAll(list, [listedToPatch({ id: id(1), isArchived: true })], 2_000_000, 'import', true)
+    expect(paneGroups(list, 2_000_001, P).finished.length).toBe(0)
+    expect(list[0]?.note).toBe('PR #226')
+    list = upsertAll(list, [listedToPatch({ id: id(1), isArchived: false, status: 'done' })], 3_000_000, 'sync', true)
+    expect(paneGroups(list, 3_000_001, P).finished.map(s => s.name)).toEqual(['shipped'])
+    expect(list[0]?.note).toBe('PR #226')
+    // A row an earlier version marked in its note comes back too.
+    const old = [{ ...list[0]!, isArchived: undefined, note: 'archived' }]
+    const back = upsertAll(old, [listedToPatch({ id: id(1), isArchived: false, isRunning: false })], 4_000_000, 'import', true)
+    expect(back[0]?.note).toBe(undefined)
+    expect(back[0]?.status).toBe('idle')
+  })
+
+  test('the pane\'s clock: due when a time\'s words change or a row changes group', () => {
+    const list = crewOf([[1, 'fresh-done', 'done']])
+    const g = paneGroups(list, 1_000_000, P)
+    // "done · 0s ago" changes in a second; once past a minute, on the minute; it folds at 30 minutes.
+    expect(nextPaneChange(g, 1_000_000, false, P)).toBe(1_001_000)
+    expect(nextPaneChange(g, 1_000_000 + 90_000, false, P)).toBe(1_000_000 + 120_000)
+    const pr = paneGroups(crewOf([[1, 'shipped', 'done', 'PR #9']]), 1_000_000, P)
+    expect(nextPaneChange(pr, 1_000_000, false, P)).toBe(1_000_000 + 1_800_000)
+    // Sleeping rows only count while they show.
+    const asleep = paneGroups(upsertAll([], [{ id: id(2), name: 'z', status: 'idle' }], 0, 't'), 100_000, P)
+    expect(nextPaneChange(asleep, 100_000, false, P)).toBe(null)
+    expect(nextPaneChange(asleep, 100_000, true, P)).toBe(120_000)
+  })
+
+  test('hide rules match name, title or id', () => {
+    const [s] = upsertAll([], [{ id: id(1), name: 'mod-ideas', title: 'Brainstorm mod ideas', status: 'idle' }], 0, 't')
+    expect(isHiddenBy(s!, ['mod-*'])).toBe(true)
+    expect(isHiddenBy(s!, ['*brainstorm*'])).toBe(true)
+    expect(isHiddenBy(s!, ['nut-*'])).toBe(false)
+  })
+
+  test('the strip summary counts sleeping sessions', () => {
+    const items = stripItems(crewOf([[1, 'busy', 'working']]), 1_000_000, 0)
+    expect(stripSummary(items, false, 13)).toBe('14 sessions · 1 working · 13 sleeping')
+    expect(stripSummary(items, true, 13)).toBe('● 1  z 13')
+  })
+})
+
 // What a session's engine would answer beneath the mod.
 const host = (on: Parameters<typeof mock.clock>[0], store: Record<string, unknown> = {}) => {
   const clock = mock.clock(on)
@@ -398,7 +491,8 @@ describe('hooks', () => {
         requestId: 'session-crew',
         props: { title: 'Session crew', isFocused: false, bodyColumns: 60, placement: 'dock' },
       } as never)
-      if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: 'nut-pr-review-fixes' })).toBeDefined()
+      // The label, not the slug: "Address CodeRabbit comments on NUT PRs" → "CodeRabbit…".
+      if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: /CodeRabbit/ })).toBeDefined()
       else expect(await ui.find({ type: 'Svg' })).toBeDefined()
       await ui.unmount()
     }
@@ -421,8 +515,8 @@ describe('hooks', () => {
       } as never)
       const alts = (await ui.findAll({ type: 'Svg' })).map(t => String(t.props.alt))
       await ui.unmount()
-      const wears = (name: string) => / the (\w+) crab/.exec(alts.find(a => a.startsWith(`${name},`)) ?? '')?.[1]
-      return [wears('one'), wears('two')]
+      const wears = (label: string) => / the (\w+) crab/.exec(alts.find(a => a.startsWith(`${label},`)) ?? '')?.[1]
+      return [wears('One'), wears('Two')]
     }
     const before = await facesNow()
     expect(before[0] === before[1]).toBe(false)
@@ -679,6 +773,60 @@ describe('hooks', () => {
       }
       expect(button).toBeDefined()
       if (cols >= 80) expect(cards.length).toBeGreaterThan(0)
+      await ui.unmount()
+    }
+  })
+
+  test('the pane folds sleeping sessions, /crew sleeping and /crew hide', { options: { pollSeconds: 0, hidePatterns: ['secret-*'] } }, async ($, on) => {
+    host(on)
+    await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+    const sessions = [
+      { id: 'local_00000000-0000-0000-0000-000000000001', name: 'busy', title: 'Busy work', status: 'working' },
+      ...[2, 3, 4].map(n => ({ id: `local_00000000-0000-0000-0000-00000000000${n}`, name: `sleepy-${n}`, title: `Sleepy ${n}`, status: 'idle' })),
+      { id: 'local_00000000-0000-0000-0000-000000000005', name: 'secret-thing', title: 'Secret', status: 'working' },
+      { id: 'local_00000000-0000-0000-0000-000000000006', name: 'noisy', title: 'Noisy one', status: 'working' },
+    ]
+    await $.tool.call({ tool: 'mcp__session-crew__status', sessions } as never)
+    const pane = { plugin: 'session-crew', component: 'Pane', requestId: 'session-crew', surface: 'desktop', props: { title: 'Session crew', isFocused: false, bodyColumns: 80, placement: 'dock' } }
+    const alts = async () => {
+      const ui = await $.ui.mount(pane as never)
+      const out = { alts: (await ui.findAll({ type: 'Svg' })).map(t => String(t.props.alt)), toggle: (await ui.find({ type: 'Button', key: 'sleeping' }))?.text }
+      await ui.unmount()
+      return out
+    }
+    let view = await alts()
+    // Reported idle without being seen working: asleep, folded; the option hides secret-*.
+    expect(view.alts.map(a => a.split(',')[0])).toEqual(['Busy work', 'Noisy one'])
+    expect(view.toggle).toBe('▸ 3 sleeping · show')
+    expect((await $.command.run({ command: 'crew', args: 'sleeping show' } as never)).text).toContain('shown')
+    view = await alts()
+    expect(view.alts.length).toBe(5)
+    expect(view.alts.filter(a => a.includes(': idle ')).length).toBe(3)
+    await $.command.run({ command: 'crew', args: 'hide noisy' } as never)
+    view = await alts()
+    expect(view.alts.some(a => a.startsWith('Noisy'))).toBe(false)
+    await $.command.run({ command: 'crew', args: 'unhide noisy' } as never)
+    await $.command.run({ command: 'crew', args: 'sleeping hide' } as never)
+    view = await alts()
+    expect(view.alts.length).toBe(2)
+  })
+
+  test('a withdrawn proposal folds as dismissed, never done', { options: { pollSeconds: 0 } }, async ($, on) => {
+    host(on)
+    on('tool.call', { tool: 'mcp__ccd_session__start_session' }, () => ({ result: PROPOSED, text: PROPOSED }))
+    on('tool.call', { tool: 'mcp__ccd_session__dismiss_task' }, () => ({ result: 'Task task_a2708030 withdrawn', text: 'Task task_a2708030 withdrawn' }))
+    await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+    await $.tool.call({ tool: 'mcp__ccd_session__start_session', initiation: 'own_initiative', title: 'x', prompt: 'y' } as never)
+    await $.tool.call({ tool: 'mcp__ccd_session__dismiss_task', task_id: 'task_a2708030' } as never)
+    for (const surface of ['desktop', 'terminal'] as const) {
+      const ui = await $.ui.mount({ plugin: 'session-crew', component: 'Pane', requestId: 'session-crew', surface, props: { title: 'Session crew', isFocused: false, bodyColumns: 80, placement: 'dock' } } as never)
+      // The fold is the pane's state, shared by surfaces: opened once.
+      if (surface === 'desktop') await ui.press({ key: 'done' })
+      if (surface === 'desktop') {
+        const alts = (await ui.findAll({ type: 'Svg' })).map(t => String(t.props.alt))
+        expect(alts.some(a => a.endsWith(': dismissed'))).toBe(true)
+        expect(alts.some(a => a.includes('done'))).toBe(false)
+      } else expect(await ui.find({ type: 'Text', text: 'dismissed' })).toBeDefined()
       await ui.unmount()
     }
   })

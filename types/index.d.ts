@@ -23,6 +23,8 @@ export type CrewSession = {
   slot?: number
   /** The costume it was given when it first joined any crew (kept in $.store), when no rule picks one. */
   costume?: string
+  /** Archived in the app (listed so, or dropped off a complete list): never shown. Kept apart from `note`, so a PR survives it. */
+  isArchived?: true
   /** Brought in by /crew import or the sync tool rather than seen being started. */
   isImported?: true
   /** What last told us the status (`start_session`, `linked-note`, `poll`, `tool`). */
@@ -31,7 +33,10 @@ export type CrewSession = {
 
 export type CrewPanel = {
   isCompact: boolean
+  /** The older finished sessions' group is folded. */
   isDoneHidden: boolean
+  /** The sleeping sessions' group is open (/crew sleeping show, kept in $.store). */
+  isSleepingShown?: boolean
 }
 
 export type CrewPoll = {
@@ -79,6 +84,8 @@ declare module 'claude-code' {
       lastPromptAt: number
       /** The strip's own clock, ticked only while a finished crab is due to change. */
       bandNow: number
+      /** Hide rules set with /crew hide (globs), mirrored from $.store. */
+      hidden: string[]
       /** Label rules set with /crew label (pattern to label), mirrored from $.store. */
       labels: Record<string, string>
       /** Short labels the model wrote from titles, by session id, mirrored from $.store. */

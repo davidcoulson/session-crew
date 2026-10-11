@@ -12,6 +12,8 @@ export type Patch = {
   status?: CrewStatus
   note?: string
   isImported?: boolean
+  /** The app says it's archived (true) or not (false); absent when the source doesn't know. */
+  isArchived?: boolean
   /** When the session was last active, if the source knows: a new row's `changedAt`. */
   since?: number
 }
@@ -148,6 +150,8 @@ export const listedToPatch = (r: Listed): Patch => ({
   title: r.title,
   status: listedStatus(r),
   note: r.prNumber ? `PR #${r.prNumber}` : undefined,
+  // An archived session is marked so (apart from its note): it never shows in the pane or the strip.
+  isArchived: r.isArchived,
   isImported: true,
   since: r.lastActivityAt ? Date.parse(r.lastActivityAt) : undefined,
 })
@@ -188,7 +192,10 @@ export const describeFilter = (f: ImportFilter): string =>
     .filter(Boolean)
     .join(', ') || 'every open session'
 
-const ARCHIVED = 'archived'
+export const ARCHIVED = 'archived'
+
+/** Archived: the flag, or the note an earlier version kept it in. */
+export const isArchivedRow = (s: CrewSession): boolean => s.isArchived === true || s.note === ARCHIVED
 
 /**
  * Imported sessions a complete list of the open sessions leaves out have been
@@ -198,8 +205,8 @@ const ARCHIVED = 'archived'
 export function missingAsArchived(crew: readonly CrewSession[], rows: readonly Listed[]): Patch[] {
   const listed = new Set(rows.map(r => r.id))
   return crew
-    .filter(s => s.isImported && s.id.startsWith('local_') && !listed.has(s.id) && s.status !== 'done' && s.status !== 'dismissed')
-    .map(s => ({ id: s.id, status: 'done' as const, note: ARCHIVED }))
+    .filter(s => s.isImported && s.id.startsWith('local_') && !listed.has(s.id) && !isArchivedRow(s))
+    .map(s => ({ id: s.id, status: 'done' as const, isArchived: true }))
 }
 
 /** An imported session still in play, which only list_sessions keeps up to date. */
@@ -280,6 +287,7 @@ export function upsert(input: CrewSession[], p: Patch, at: number, source: strin
       note: p.note,
       source,
       ...(p.isImported ? { isImported: true as const } : {}),
+      ...(p.isArchived ? { isArchived: true as const } : {}),
       slot: list.reduce((m, r) => Math.max(m, (r.slot ?? -1) + 1), 0),
     }
     return [...list, row].slice(-100)
@@ -288,7 +296,7 @@ export function upsert(input: CrewSession[], p: Patch, at: number, source: strin
   let status = p.status ?? prev.status
   // A list knows running or not, never done: it doesn't undo a done, except one it inferred
   // itself from an archive (`missingAsArchived`) that was since undone.
-  if (weak && prev.status === 'done' && status === 'idle' && prev.note !== ARCHIVED) status = 'done'
+  if (weak && prev.status === 'done' && status === 'idle' && !isArchivedRow(prev)) status = 'done'
   if (prev.status === 'dismissed' && status === 'proposed') status = 'dismissed'
   const changed = status !== prev.status
   const next: CrewSession = {
@@ -300,12 +308,20 @@ export function upsert(input: CrewSession[], p: Patch, at: number, source: strin
     status,
     changedAt: changed ? at : prev.changedAt,
     changeSeenAt: changed ? at : prev.changeSeenAt,
+    // The archive state is the app's to say, list or not: archived, or no longer.
+    ...(p.isArchived === true ? { isArchived: true as const } : {}),
     endedAt: isEnded(status) ? (changed ? at : prev.endedAt ?? at) : undefined,
-    note: weak ? prev.note : p.note ?? (changed ? undefined : prev.note),
+    // A list's note (its PR) fills a row that has none; it never replaces the app's own note. An old
+    // archive marker in the note is cleared once the app lists the session unarchived.
+    note: (() => {
+      const kept = prev.note === ARCHIVED && p.isArchived === false ? undefined : prev.note
+      return weak ? kept ?? p.note : p.note ?? (changed ? undefined : kept)
+    })(),
     source,
   }
   // A proposal that became a session runs from when it started.
   if (prev.status === 'proposed' && status === 'working') next.startedAt = at
+  if (p.isArchived === false) delete next.isArchived
   return list.map((s, i) => (i === idx ? next : s))
 }
 
@@ -533,8 +549,9 @@ export function stripItems(crew: readonly CrewSession[], at: number, lastPromptA
   for (const s of crew) {
     if (s.status === 'working') out.push({ session: s, pose: 'working' })
     else if (s.changeSeenAt === undefined) continue
-    else if (s.status === 'idle' && at - s.changedAt < t.idleMs) out.push({ session: s, pose: at - s.changedAt < t.needsMs ? 'needs' : 'idle' })
-    else if (s.status === 'done' && s.endedAt !== undefined && s.note !== 'archived') {
+    // Sleeping sessions never draw in the strip (the summary counts them): only one that needs you.
+    else if (s.status === 'idle' && at - s.changedAt < t.needsMs) out.push({ session: s, pose: 'needs' })
+    else if (s.status === 'done' && s.endedAt !== undefined && !isArchivedRow(s)) {
       const age = at - s.endedAt
       if (age < t.holdMs || s.endedAt > lastPromptAt) out.push({ session: s, pose: age < t.celebrateMs ? 'done' : 'finished' })
     }
@@ -571,18 +588,20 @@ export function pillText(i: StripItem, at: number): string {
   return pr ? `done · ${pr}` : 'done ✓'
 }
 
-/** "4 sessions · 2 working · 1 needs you · 1 done", or the counts alone. */
-export function stripSummary(items: readonly StripItem[], isNarrow: boolean): string {
+/** "4 sessions · 2 working · 1 needs you · 1 done · 13 sleeping", or the counts alone. */
+export function stripSummary(items: readonly StripItem[], isNarrow: boolean, sleeping = 0): string {
   const n = (...p: StripPose[]) => items.filter(i => p.includes(i.pose)).length
   const parts: [number, string, string][] = [
     [n('working'), 'working', '●'],
     [n('needs'), 'needs you', '!'],
     [n('idle'), 'idle', 'z'],
     [n('done', 'finished'), 'done', '✓'],
+    [sleeping, 'sleeping', 'z'],
   ]
   const shown = parts.filter(([c]) => c > 0)
   if (isNarrow) return shown.map(([c, , glyph]) => `${glyph} ${c}`).join('  ')
-  return [`${items.length} session${items.length === 1 ? '' : 's'}`, ...shown.map(([c, word]) => `${c} ${word}`)].join(' · ')
+  const total = items.length + sleeping
+  return [`${total} session${total === 1 ? '' : 's'}`, ...shown.map(([c, word]) => `${c} ${word}`)].join(' · ')
 }
 
 /** When the strip next changes by the clock alone (a celebration ending, a hold running out), or null. */
@@ -600,4 +619,101 @@ export function nextStripChange(items: readonly StripItem[], at: number, t = STR
     if (due !== null && due > at && (soonest === null || due < soonest)) soonest = due
   }
   return soonest
+}
+
+// --- the pane: what shows, what folds away ---------------------------------------
+
+/** Whether a hide rule (the `hidePatterns` option, /crew hide) matches a session's name, title or id. */
+export function isHiddenBy(s: CrewSession, patterns: readonly string[]): boolean {
+  return patterns.some(p => {
+    const re = globRe(p)
+    return re.test(s.name) || re.test(s.title) || re.test(s.id)
+  })
+}
+
+export type PaneKind = 'needs' | 'working' | 'proposed' | 'done'
+export type PaneRow = { session: CrewSession; kind: PaneKind }
+
+export const PANE_TIMES = {
+  /** A session that went idle this recently needs you (as in the strip). */
+  needsMs: STRIP_TIMES.needsMs,
+  /** A session that finished this recently stays in the main list (the `recentMinutes` option). */
+  recentMs: 30 * 60_000,
+}
+
+const KIND_ORDER: PaneKind[] = ['needs', 'working', 'proposed', 'done']
+
+/**
+ * The pane's groups. Main: working, needs you (went idle in the last 15
+ * minutes), proposed, and finished recently (`recentMs`), in that order.
+ * Sleeping: every other idle session, newest first, folded by default.
+ * Finished: older finished and dismissed ones, folded. Archived sessions are
+ * in none. "Needs you" and "finished recently" need a change this crew saw:
+ * a session first seen idle or done (an import) is sleeping or finished.
+ */
+export function paneGroups(
+  crew: readonly CrewSession[],
+  at: number,
+  t = PANE_TIMES,
+): { main: PaneRow[]; sleeping: CrewSession[]; finished: CrewSession[] } {
+  const main: PaneRow[] = []
+  const sleeping: CrewSession[] = []
+  const finished: CrewSession[] = []
+  for (const s of crew) {
+    if (isArchivedRow(s)) continue
+    const seen = s.changeSeenAt !== undefined
+    if (s.status === 'working') main.push({ session: s, kind: 'working' })
+    else if (s.status === 'proposed') main.push({ session: s, kind: 'proposed' })
+    else if (s.status === 'idle') {
+      if (seen && at - s.changedAt < t.needsMs) main.push({ session: s, kind: 'needs' })
+      else sleeping.push(s)
+    } else if (s.status === 'done' && seen && at - (s.endedAt ?? s.changedAt) < t.recentMs) main.push({ session: s, kind: 'done' })
+    else finished.push(s)
+  }
+  main.sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || b.session.changedAt - a.session.changedAt)
+  sleeping.sort((a, b) => b.changedAt - a.changedAt)
+  finished.sort((a, b) => (b.endedAt ?? b.changedAt) - (a.endedAt ?? a.changedAt))
+  return { main, sleeping, finished }
+}
+
+/** The PR a session's note names ("PR #226"), if any. */
+export const prOf = (s: CrewSession): string | undefined => /PR #\d+/.exec(s.note ?? '')?.[0]
+
+/** A main row's words on the right: "working · 12m", "needs you · 3m", "proposed", "done · PR #226" or "done · 4m ago". */
+export function paneRowText(r: PaneRow, at: number): string {
+  const s = r.session
+  if (r.kind === 'working') return `working · ${workingFor(at - s.changedAt)}`
+  if (r.kind === 'needs') return `needs you · ${fmtAgo(at - s.changedAt)}`
+  if (r.kind === 'proposed') return 'proposed'
+  const pr = prOf(s)
+  return pr ? `done · ${pr}` : `done · ${fmtAgo(at - (s.endedAt ?? s.changedAt))} ago`
+}
+
+/** When an "ago" text (fmtAgo) next changes: each second under a minute, then on the minute, the hour, the day. */
+export function agoDue(since: number, at: number): number {
+  const age = Math.max(0, at - since)
+  const step = age < 60_000 ? 1_000 : age < 3_600_000 ? 60_000 : age < 86_400_000 ? 3_600_000 : 86_400_000
+  return since + (Math.floor(age / step) + 1) * step
+}
+
+/**
+ * When the pane's drawing next changes by the clock alone, or null: an
+ * elapsed time's words ("working · 12m", "needs you · 3m", "done · 4m ago",
+ * "idle 8m" while sleeping rows show), or a row moving group (needs you →
+ * sleeping, recently finished → finished).
+ */
+export function nextPaneChange(g: ReturnType<typeof paneGroups>, at: number, isSleepingShown: boolean, t = PANE_TIMES): number | null {
+  const dues: number[] = []
+  for (const { session: s, kind } of g.main) {
+    if (kind === 'working') dues.push(workingDue(s.changedAt, at))
+    else if (kind === 'needs') dues.push(agoDue(s.changedAt, at), s.changedAt + t.needsMs)
+    else if (kind === 'done') {
+      const ended = s.endedAt ?? s.changedAt
+      if (!prOf(s)) dues.push(agoDue(ended, at))
+      dues.push(ended + t.recentMs)
+    }
+  }
+  if (isSleepingShown) for (const s of g.sleeping) dues.push(agoDue(s.changedAt, at))
+  const future = dues.filter(d => d > at)
+  return future.length ? Math.min(...future) : null
 }

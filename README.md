@@ -11,18 +11,27 @@ Early-access mod API; built and tested on Claude Code 2.1.295 (desktop) and 2.1.
 
 ## What it shows
 
-`/crew` toggles a pane listing every session linked to this one:
+`/crew` toggles a pane of the sessions linked to this one (and any imported). It stays calm by default:
+
+- **The main list**: sessions **working**, ones that **need you** (went idle in the last 15 minutes) and ones that
+  **finished recently** (in the last `recentMinutes`, default 30), each on two lines: the crab and the label, under it
+  the title and PR, and a status pill on the right ("working · 12m", "needs you · 3m", "done · PR #226").
+- **"13 sleeping · show"**: every other idle session, folded into one row; opened, each is one compact line
+  (crab, label, "idle 8m"). `/crew sleeping show|hide` sets it, and it's remembered.
+- **"5 finished · show"**: older finished sessions, folded, one line each ("done · PR #199").
+- **Never shown**: archived sessions, and any session a hide rule matches (`/crew hide`, the `hidePatterns` option).
+
+Hover a row for the whole title, the session's handle and the app's note ("started by …"). Each row shows:
 
 | | |
 | --- | --- |
 | crab | its costume from your `faces` rules or `/crew face`, else the next one in turn (kept for the session's life) |
-| name | the app's short handle (`nut-pr-review-fixes`) |
-| title, note | the session's title, plus the app's extras (`PR #224`, `started by …`) |
-| status | `proposed` (a card), `working`, `sleeping` (idle), `done`, `dismissed` |
-| time | run length while working or done; `idle 4m` while sleeping |
+| label | a short human label (see Labels below), not the app's handle |
+| title, PR | on a main row's second line: the title when it says more than the label, and the PR |
+| status | the pill: working, needs you, proposed, done (with its PR) |
 
-Buttons under the rows: **Crabs only** (a compact strip), **finished · n** (hide or show done
-sessions) and **Refresh**. The status line also carries `crew: 2 working · 1 sleeping`.
+Buttons under the rows: **Crabs only** (the main list as a strip of crabs) and **Refresh**. The status line also
+carries `crew: 2 working · 1 sleeping`.
 
 ### The strip above the prompt
 
@@ -34,11 +43,10 @@ colour is never the only cue:
 | --- | --- |
 | **`! needs you`** (solid) | went idle in the last 15 minutes: its turn ended and it waits on you |
 | `● working 12m` | working, for that long |
-| `z idle` | went idle 15 to 60 minutes ago |
 | `✓ done` / `✓ done · PR #226` | finished while you watched: celebrates for 5 s, then goes muted (still readable) and stays until your next prompt, at least a minute |
 
-Order: needs you, working, idle, done. With more than six, the needs-you and working cards show and the rest are
-`+N more`. Beside the cards, **"4 sessions · 2 working · 1 needs you · 1 done"** (just `● 2  ! 1  ✓ 1` when narrow)
+Order: needs you, working, done. Sleeping sessions never draw a crab here; the summary counts them. With more than six, the needs-you and working cards show and the rest are
+`+N more`. Beside the cards, **"4 sessions · 2 working · 1 needs you · 1 done · 13 sleeping"** (just `● 2  ! 1  ✓ 1  z 13` when narrow)
 opens the pane. Hover a card for the session's full title and status.
 
 **Labels** come from, in order: a `labels` rule or `/crew label`; else a 1–3 word label a small model (Haiku, low
@@ -48,7 +56,7 @@ the title shortened by rule (its opening verb dropped, cut at a word). Up to 16 
 Sessions first seen already idle or done (an import, the app's note at start) show only in the pane, so the strip
 holds what changed while you watched. It sits on top of anything else in that band (savvy-progress's bar); while
 savvy-progress shows a flow and is higher in the chain it draws alone, and the strip is back when the flow ends.
-The terminal draws the same cards in text: `▣ Label` and a coloured `● working 12m`, ` ! needs you `, `z idle` or `✓ done`.
+The terminal draws the same cards in text: `▣ Label` and a coloured `● working 12m`, ` ! needs you ` or `✓ done`.
 
 ### Commands
 
@@ -57,6 +65,8 @@ The terminal draws the same cards in text: `▣ Label` and a coloured `● worki
 - `/crew faces`: list the rules and who wears what
 - `/crew import [parent <local_id>] [<name-glob>] [--archived]`: bring in sessions that already exist (see below); `/crew import off` stops
 - `/crew refresh`: ask the app for the sessions now
+- `/crew sleeping show|hide`: open or fold the sleeping sessions in the pane (kept across sessions)
+- `/crew hide <name-or-glob>`: leave matching sessions out of the pane and the strip; `/crew unhide <glob>` (or bare, all) brings them back
 - `/crew strip on|off`: show or hide the strip above the prompt (kept across sessions); bare `/crew strip` toggles
 - `/crew label <name-or-glob> <label>`: the strip's label for matching sessions (kept across sessions); without a label it removes the rule
 - `/crew labels`: list the label rules and every session's label
@@ -144,6 +154,8 @@ everything the app already tells the session:
       "labels": ["todo-mod=To-do mod", "add-nic-*=NIC sensors"],
       "aiLabels": true,
       "stripScale": 1.5,
+      "recentMinutes": 30,
+      "hidePatterns": ["mod-ideas"],
       "pollSeconds": 30,
       "autoOpen": true,
       "strip": true
@@ -152,7 +164,8 @@ everything the app already tells the session:
 }
 ```
 
-`labels` rules are `pattern=label`, matched like `faces`, and win over the model's labels; `stripScale` sizes the
+`hidePatterns` are globs matched like `faces`, leaving those sessions out (as `/crew hide` does); `recentMinutes` is how
+long a finished session stays in the main list. `labels` rules are `pattern=label`, matched like `faces`, and win over the model's labels; `stripScale` sizes the
 strip's crabs (0.8 to 2.5). `strip: false` starts sessions without the strip (`/crew strip on` still shows it). `faces` rules are `pattern=costume`, matched against a session's name, title or id with `*` and `?`;
 the first match wins, and `/crew face` rules win over these. A rule naming no costume is ignored.
 savvy-flow's tier names (`fable`, `heavy`, `careful`, `medium`, `light`, `explore`) work as costumes too.
