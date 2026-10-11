@@ -173,7 +173,9 @@ describe('importing', () => {
     expect(parseListing('{"error":"server not ready"}')).toBe(null)
     expect(parseListing('[{"message":"busy"}]')).toBe(null)
     expect(parseListing('[1,2]')).toBe(null)
-    expect(parseListing('{"sessionId":"local_x","isRunning":true}')?.length).toBe(1)
+    expect(parseListing('[{"id":"x"}]')).toBe(null)
+    expect(parseListing('[{"sessionId":"local_x"}]')).toBe(null)
+    expect(parseListing('{"sessionId":"local_x","isArchived":false,"isRunning":true}')?.length).toBe(1)
   })
 
   test('a proposal\'s crab follows it into its session id', () => {
@@ -287,9 +289,9 @@ describe('hooks', () => {
 
     // A later list (the model's, or the prompt refresh) moves them on and adds new matches, crabs unchanged.
     listed = JSON.stringify([
-      { sessionId: 'local_1fc7cd3c-3b35-456d-af06-23bec066b037', name: 'nut-pr-review-fixes', isRunning: false, startedBy: MAIN },
-      { sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', name: 'plan-anycast-dns-adguard', isRunning: true, startedBy: MAIN },
-      { sessionId: 'local_00000000-0000-0000-0000-0000000000aa', name: 'brand-new', isRunning: true, startedBy: MAIN },
+      { sessionId: 'local_1fc7cd3c-3b35-456d-af06-23bec066b037', isArchived: false, name: 'nut-pr-review-fixes', isRunning: false, startedBy: MAIN },
+      { sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', isArchived: false, name: 'plan-anycast-dns-adguard', isRunning: true, startedBy: MAIN },
+      { sessionId: 'local_00000000-0000-0000-0000-0000000000aa', isArchived: false, name: 'brand-new', isRunning: true, startedBy: MAIN },
     ])
     await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
     crew = await crewOf($)
@@ -321,14 +323,16 @@ describe('hooks', () => {
     expect((await nut())?.status).toBe('working')
 
     // A list cut at its limit says nothing about who is missing.
-    listed = JSON.stringify([{ sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', name: 'plan-anycast-dns-adguard', startedBy: MAIN }])
+    listed = JSON.stringify([{ sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', isArchived: false, name: 'plan-anycast-dns-adguard', startedBy: MAIN }])
     await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 1 } as never)
     expect((await nut())?.status).toBe('working')
     // An error answer is no list: nothing is inferred from it.
-    listed = '{"error":"server not ready"}'
-    await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
-    expect((await nut())?.status).toBe('working')
-    listed = JSON.stringify([{ sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', name: 'plan-anycast-dns-adguard', startedBy: MAIN }])
+    for (const junk of ['{"error":"server not ready"}', '[{"id":"x"}]', '[{"message":"busy"}]']) {
+      listed = junk
+      await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
+      expect((await nut())?.status).toBe('working')
+    }
+    listed = JSON.stringify([{ sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', isArchived: false, name: 'plan-anycast-dns-adguard', startedBy: MAIN }])
     // A complete list without it: archived.
     await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
     expect((await nut())?.status).toBe('done')

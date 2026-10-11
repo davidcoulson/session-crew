@@ -107,8 +107,16 @@ export function normalizeListed(rows: readonly unknown[]): Listed[] {
     }))
 }
 
+// A row as the app writes it: every list_sessions and get_session row has its
+// `sessionId` and `isArchived`. (Rows the model hands the sync tool go through
+// normalizeListed alone, which takes `id` too.)
 const isSessionRow = (v: unknown): boolean =>
-  !!v && typeof v === 'object' && !Array.isArray(v) && (typeof (v as ListedRow).sessionId === 'string' || typeof (v as ListedRow).id === 'string')
+  !!v &&
+  typeof v === 'object' &&
+  !Array.isArray(v) &&
+  typeof (v as ListedRow).sessionId === 'string' &&
+  ((v as ListedRow).sessionId ?? '').length > 0 &&
+  typeof (v as ListedRow).isArchived === 'boolean'
 
 /**
  * The rows of a list_sessions result (a JSON array of session rows) or a
