@@ -172,7 +172,8 @@ export const TERM_GAP = 2
 /**
  * The terminal row that fits `cols`: the most cards that fit beside the
  * summary and the "+N more", the full summary on a tie, else the counts; with
- * no room for any card, the counts alone (with the "+N more").
+ * no room for any card, "+N more" and the counts, else the counts alone, cut
+ * to the columns at the last. The row never runs past `cols`.
  */
 export function fitTerminalRow(
   items: StripItem[],
@@ -192,6 +193,18 @@ export function fitTerminalRow(
       if (width(shown, more, text) <= cols) return { shown, more, summary: text }
     }
   }
-  const { shown, more } = stripShown(items, 0, 6, 0)
-  return { shown, more, summary: summary(true) }
+  // Not even the counts beside "+N more": the counts alone, cut to the columns if need be
+  // (the "+N more" is left out, `more` 0, since there's no room to say it).
+  return { shown: [], more: 0, summary: clipCells(summary(true), cols) }
+}
+
+/** `text` cut to `max` cells, an ellipsis last when it was cut. */
+export function clipCells(text: string, max: number): string {
+  if (cells(text) <= max) return text
+  let out = ''
+  for (const ch of text) {
+    if (cells(out + ch) + 1 > max) break
+    out += ch
+  }
+  return max > 0 ? out.trimEnd() + '…' : ''
 }

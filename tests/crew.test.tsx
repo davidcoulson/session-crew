@@ -297,11 +297,14 @@ describe('the strip above the prompt', () => {
     const card = (i: (typeof items)[number]) => termCardCells(i.pose, i.session.title, pillText(i, 3))
     const rowCells = (r: ReturnType<typeof fitTerminalRow>) =>
       r.shown.reduce((w, i) => w + card(i), 0) + (r.more ? cells(`+${r.more} more`) : 0) + cells(r.summary) + TERM_GAP * (r.shown.length + (r.more ? 1 : 0))
-    for (const cols of [20, 34, 40, 60, 80, 100, 140, 220]) {
+    for (let cols = 1; cols <= 220; cols++) {
       const r = fitTerminalRow(items, cols, card, n => stripSummary(items, n))
-      if (r.shown.length) expect(rowCells(r)).toBeLessThanOrEqual(cols)
-      expect(r.shown.length + r.more).toBe(items.length)
+      expect(rowCells(r)).toBeLessThanOrEqual(cols)
+      // Every session is drawn or counted, unless there's no room even for "+N more".
+      if (r.shown.length || r.more) expect(r.shown.length + r.more).toBe(items.length)
     }
+    // Very narrow: the counts alone, cut to fit.
+    expect(fitTerminalRow(items, 6, card, n => stripSummary(items, n))).toEqual({ shown: [], more: 0, summary: '● 4…' })
     expect(fitTerminalRow(items, 400, card, n => stripSummary(items, n)).shown.length).toBe(5)
     expect(fitTerminalRow(items, 400, card, n => stripSummary(items, n)).summary).toContain('sessions')
   })
@@ -654,7 +657,7 @@ describe('hooks', () => {
       tool: 'mcp__session-crew__status',
       sessions: [1, 2, 3, 4].map(n => ({ id: `local_00000000-0000-0000-0000-00000000000${n}`, name: `s${n}`, title: `Session number ${n} with a long title`, status: 'working' })),
     } as never)
-    for (const cols of [30, 50, 80, 120]) {
+    for (const cols of [8, 14, 30, 50, 80, 120]) {
       const ui = await $.ui.mount({
         plugin: 'session-crew',
         surface: 'terminal',
@@ -668,6 +671,7 @@ describe('hooks', () => {
       const button = await ui.find({ type: 'Button', key: 'session-crew-open' })
       const parts = [...cards.map(t => t.text), ...(more ? [more.text] : []), button?.text ?? '']
       const drawn = parts.reduce((w, t) => w + cells(t), 0) + TERM_GAP * (parts.length - 1)
+      expect(drawn).toBeLessThanOrEqual(cols)
       if (cards.length) {
         // A card's text is the whole card, its nested pill included, or this would measure nothing.
         expect(cards[0]?.text).toMatch(/^▣ Session.* working <1m$/)
