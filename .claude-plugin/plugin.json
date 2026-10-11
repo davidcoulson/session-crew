@@ -1,0 +1,32 @@
+{
+  "name": "session-crew",
+  "version": "0.1.0",
+  "description": "A panel of the side sessions this Claude Code desktop session started (/crew): name, title, status and time, each with a face of your choosing that works, sleeps and parties.",
+  "author": {
+    "name": "David Coulson",
+    "url": "https://github.com/davidcoulson"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "faces": {
+      "type": "string",
+      "multiple": true,
+      "title": "Faces",
+      "description": "pattern=face pairs, matched against a session's name or title (* and ? globs, first match wins), e.g. nut-*=🔧 or prismarr*=(=^.^=). Unmatched sessions get a random animal.",
+      "default": []
+    },
+    "pollSeconds": {
+      "type": "number",
+      "title": "Poll interval (seconds)",
+      "description": "How often to ask the desktop app for linked sessions while any is working; 0 turns polling off.",
+      "default": 30
+    },
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the panel when a session starts",
+      "description": "Opens the crew panel whenever start_session proposes or starts a session.",
+      "default": true
+    }
+  },
+  "license": "MIT"
+}
