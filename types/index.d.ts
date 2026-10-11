@@ -17,8 +17,12 @@ export type CrewSession = {
   endedAt?: number
   /** Extra words from the app's note: `PR #199`, `started by x`. */
   note?: string
-  /** Order it joined the crew; picks its costume when no rule does. */
+  /** Order it joined the crew; picks its costume when no rule and no `costume` does. */
   slot?: number
+  /** The costume it was given when it first joined any crew (kept in $.store), when no rule picks one. */
+  costume?: string
+  /** Brought in by /crew import or the sync tool rather than seen being started. */
+  isImported?: true
   /** What last told us the status (`start_session`, `linked-note`, `poll`, `tool`). */
   source: string
 }
@@ -29,10 +33,29 @@ export type CrewPanel = {
 }
 
 export type CrewPoll = {
-  /** False once a `$.mcp.call` to the app's session server failed. */
+  /** False once the mod could not fetch list_sessions itself, by either route. */
   isAvailable: boolean
+  /** How the last fetch got through: the MCP server directly, or the session's own tool call. */
+  via?: 'mcp' | 'tool'
   lastAt: number
   lastError?: string
+}
+
+export type CrewListed = {
+  id: string
+  name?: string
+  title?: string
+  isRunning?: boolean
+  isArchived?: boolean
+  startedBy?: string
+  prNumber?: number
+  status?: string
+}
+
+export type CrewImport = {
+  parent?: string
+  match?: string
+  includeArchived?: boolean
 }
 
 declare module 'claude-code' {
@@ -42,6 +65,10 @@ declare module 'claude-code' {
       panel: CrewPanel
       poll: CrewPoll
       now: number
+      /** The last list_sessions result seen, for the sync tool to import from. */
+      listing: CrewListed[]
+      /** The /crew import filter in force (mirrored in $.store), or null. */
+      importing: CrewImport | null
       /** Costume rules set with /crew face (pattern to costume), mirrored from $.store. */
       faces: Record<string, string>
     }

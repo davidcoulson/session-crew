@@ -1,7 +1,7 @@
 // Pure helpers: reading the desktop app's session texts, merging what they say
 // into the crew, and picking faces. No `$` here, so tests can call them directly.
 
-import type { CrewSession, CrewStatus } from '../types'
+import type { CrewImport, CrewListed, CrewSession, CrewStatus } from '../types'
 import { ROTATION, costumeKey } from './crab'
 
 export type Patch = {
@@ -11,6 +11,7 @@ export type Patch = {
   title?: string
   status?: CrewStatus
   note?: string
+  isImported?: boolean
 }
 
 // --- what the app's tools answer ------------------------------------------
@@ -72,30 +73,108 @@ export function parseProposalsStarted(text: string): Patch[] {
 }
 
 // `list_sessions` / `get_session`: a JSON array, or one object.
-type ListedSession = {
+/** A list_sessions row, or one the model passed to the sync tool. */
+export type Listed = CrewListed
+
+type ListedRow = {
   sessionId?: string
+  id?: string
   title?: string
   name?: string
   isRunning?: boolean
   isArchived?: boolean
+  startedBy?: string
+  prNumber?: number
+  status?: string
 }
 
-export function parseListedSessions(text: string): Patch[] {
+/** Rows as the app or the model hands them: `sessionId` or `id`, other fields kept when well-typed. */
+export function normalizeListed(rows: readonly unknown[]): Listed[] {
+  return rows
+    .map(r => r as ListedRow)
+    .filter(r => r && typeof r === 'object')
+    .map(r => ({ ...r, id: typeof r.sessionId === 'string' ? r.sessionId : r.id }))
+    .filter((r): r is ListedRow & { id: string } => typeof r.id === 'string' && r.id.startsWith('local_'))
+    .map(r => ({
+      id: r.id,
+      name: typeof r.name === 'string' ? r.name : undefined,
+      title: typeof r.title === 'string' ? r.title : undefined,
+      isRunning: typeof r.isRunning === 'boolean' ? r.isRunning : undefined,
+      isArchived: typeof r.isArchived === 'boolean' ? r.isArchived : undefined,
+      startedBy: typeof r.startedBy === 'string' ? r.startedBy : undefined,
+      prNumber: typeof r.prNumber === 'number' ? r.prNumber : undefined,
+      status: typeof r.status === 'string' ? r.status : undefined,
+    }))
+}
+
+/** The rows of a list_sessions (or get_session) result; null when it isn't one, so a valid `[]` is told apart. */
+export function parseListing(text: string): Listed[] | null {
   let data: unknown
   try {
     data = JSON.parse(text)
   } catch {
-    return []
+    return null
   }
-  const rows = (Array.isArray(data) ? data : [data]) as ListedSession[]
-  return rows
-    .filter(r => r && typeof r.sessionId === 'string' && r.sessionId.startsWith('local_'))
-    .map(r => ({
-      id: r.sessionId,
-      name: r.name,
-      title: r.title,
-      status: r.isArchived ? 'done' : r.isRunning ? 'working' : 'idle',
-    }))
+  if (!data || typeof data !== 'object') return null
+  return normalizeListed(Array.isArray(data) ? data : [data])
+}
+
+const listedStatus = (r: Listed): CrewStatus =>
+  r.isArchived ? 'done' : r.status ? statusOf(r.status) : r.isRunning ? 'working' : 'idle'
+
+export const listedToPatch = (r: Listed): Patch => ({
+  id: r.id,
+  name: r.name,
+  title: r.title,
+  status: listedStatus(r),
+  note: r.prNumber ? `PR #${r.prNumber}` : undefined,
+  isImported: true,
+})
+
+export function parseListedSessions(text: string): Patch[] {
+  return (parseListing(text) ?? []).map(listedToPatch)
+}
+
+// --- importing sessions that predate this one ------------------------------
+
+/** `parent`: only sessions that id started; `match`: a glob on name or title. */
+export type ImportFilter = CrewImport
+
+/**
+ * `/crew import` arguments: nothing for every open session, `parent <id>`,
+ * a glob, `--archived`; `off` stops importing. Any order.
+ */
+export function parseImportArgs(words: readonly string[]): ImportFilter | 'off' | { error: string } {
+  if (words.length === 1 && words[0] === 'off') return 'off'
+  const f: ImportFilter = {}
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i] ?? ''
+    if (w === '--archived' || w === 'archived') f.includeArchived = true
+    else if (w === 'parent' || w === '--parent') {
+      const id = words[++i]
+      if (!id?.startsWith('local_')) return { error: 'parent needs a local_… session id' }
+      f.parent = id
+    } else if (w.startsWith('local_')) f.parent = w
+    else if (w === 'all') continue
+    else if (f.match) return { error: `one glob at a time (got ${f.match} and ${w})` }
+    else f.match = w
+  }
+  return f
+}
+
+export const describeFilter = (f: ImportFilter): string =>
+  [f.parent ? `started by ${f.parent}` : '', f.match ? `matching ${f.match}` : '', f.includeArchived ? 'archived included' : '']
+    .filter(Boolean)
+    .join(', ') || 'every open session'
+
+export function selectForImport(rows: readonly Listed[], f: ImportFilter): Listed[] {
+  const re = f.match ? globRe(f.match) : null
+  return rows.filter(
+    r =>
+      (f.includeArchived || !r.isArchived) &&
+      (!f.parent || r.startedBy === f.parent) &&
+      (!re || re.test(r.name ?? '') || re.test(r.title ?? '')),
+  )
 }
 
 /** Everything a user-side row says about sessions, in the order it should apply. */
@@ -121,10 +200,32 @@ const isEnded = (s: CrewStatus): boolean => s === 'done' || s === 'dismissed'
  * Merges one patch. `weak` sources (a poll, a list) only know running or not,
  * so they never turn a done session back to idle.
  */
-export function upsert(list: CrewSession[], p: Patch, at: number, source: string, weak = false): CrewSession[] {
-  const idx = list.findIndex(
-    s => (p.id && (s.id === p.id || s.taskId === p.id)) || (p.taskId && (s.id === p.taskId || s.taskId === p.taskId)) || (!p.id && p.name && s.name === p.name),
-  )
+export function upsert(input: CrewSession[], p: Patch, at: number, source: string, weak = false): CrewSession[] {
+  let list = input
+  const matches = (s: CrewSession): boolean =>
+    !!((p.id && (s.id === p.id || s.taskId === p.id)) || (p.taskId && (s.id === p.taskId || s.taskId === p.taskId)) || (!p.id && p.name && s.name === p.name))
+  // A proposal and the session it became may both be rows already (one seen proposed, one
+  // imported); a patch that links them folds the later into the earlier, which keeps its crab.
+  const hits = list.flatMap((s, i) => (matches(s) ? [i] : []))
+  if (hits.length > 1) {
+    const [first = 0, ...rest] = hits
+    const keep = list[first] as CrewSession
+    const merged = rest.reduce<CrewSession>((acc, i) => {
+      const o = list[i] as CrewSession
+      return {
+        ...acc,
+        id: acc.id.startsWith('local_') ? acc.id : o.id,
+        taskId: acc.taskId ?? o.taskId,
+        name: acc.name || o.name,
+        title: acc.title || o.title,
+        status: o.changedAt > acc.changedAt ? o.status : acc.status,
+        changedAt: Math.max(acc.changedAt, o.changedAt),
+        costume: acc.costume ?? o.costume,
+      }
+    }, keep)
+    list = list.flatMap((s, i) => (i === first ? [merged] : rest.includes(i) ? [] : [s]))
+  }
+  const idx = list.findIndex(matches)
   if (idx < 0) {
     if (!p.id) return list
     const status = p.status ?? 'idle'
@@ -139,6 +240,7 @@ export function upsert(list: CrewSession[], p: Patch, at: number, source: string
       endedAt: isEnded(status) ? at : undefined,
       note: p.note,
       source,
+      ...(p.isImported ? { isImported: true as const } : {}),
       slot: list.reduce((m, r) => Math.max(m, (r.slot ?? -1) + 1), 0),
     }
     return [...list, row].slice(-100)
@@ -170,7 +272,7 @@ export const upsertAll = (list: CrewSession[], patches: Patch[], at: number, sou
 
 // --- costumes --------------------------------------------------------------
 
-const globRe = (pattern: string): RegExp =>
+export const globRe = (pattern: string): RegExp =>
   new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i')
 
 /** `pattern=costume` lines (the `faces` option) into ordered pairs. */
@@ -185,8 +287,9 @@ export const parseFaceRules = (lines: readonly string[] | string | undefined): [
 /**
  * One costume per session: the first rule whose pattern matches its name,
  * title or id (rules set with /crew face come first), else the next costume in
- * the rotation by the order it joined the crew (its `slot`), so a session keeps
- * its crab whatever its status and whatever else joins or leaves.
+ * the rotation: the `costume` it got when it first joined any crew (see
+ * `giveCostumes`), else by the order it joined this one (its `slot`), so a
+ * session keeps its crab whatever its status and whatever joins or leaves.
  */
 export function assignCostumes(crew: readonly CrewSession[], rules: [string, string][]): Map<string, string> {
   const compiled = rules
@@ -195,7 +298,7 @@ export function assignCostumes(crew: readonly CrewSession[], rules: [string, str
   const out = new Map<string, string>()
   crew.forEach((s, i) => {
     const hit = compiled.find(([re]) => re.test(s.name) || re.test(s.title) || re.test(s.id))
-    out.set(s.id, hit ? hit[1] : (ROTATION[(s.slot ?? i) % ROTATION.length] ?? 'other'))
+    out.set(s.id, hit ? hit[1] : s.costume ?? ROTATION[(s.slot ?? i) % ROTATION.length] ?? 'other')
   })
   return out
 }
@@ -224,4 +327,42 @@ export function timeLabel(s: CrewSession, at: number): string {
   if (s.status === 'done') return fmtTime((s.endedAt ?? at) - s.startedAt)
   if (s.status === 'idle') return `idle ${fmtAgo(at - s.changedAt)}`
   return fmtAgo(at - s.changedAt)
+}
+
+/** Costumes handed out so far, by session id, kept in $.store across sessions. */
+export type CostumeBook = { byId: Record<string, string>; next: number }
+
+/** Another session may have written the book meanwhile: keep its entries and its count too. */
+export const mergeBooks = (stored: CostumeBook, mine: CostumeBook): CostumeBook => ({
+  byId: { ...stored.byId, ...mine.byId },
+  next: Math.max(stored.next, mine.next),
+})
+
+/**
+ * Gives each row without a costume the one the book has for it, else the next
+ * in the rotation, writing that into the book. Returns null when nothing changed.
+ */
+export function giveCostumes(list: CrewSession[], book: CostumeBook): { list: CrewSession[]; book: CostumeBook } | null {
+  // A proposal that became a session keeps its crab, and the book learns its new id.
+  if (list.every(s => s.costume && book.byId[s.id] === s.costume)) return null
+  const byId = { ...book.byId }
+  let next = book.next
+  const out = list.map(s => {
+    if (s.costume) {
+      byId[s.id] = s.costume
+      return s
+    }
+    const key = s.taskId && byId[s.taskId] ? s.taskId : s.id
+    let costume = byId[key]
+    if (!costume) {
+      costume = ROTATION[next % ROTATION.length] ?? 'other'
+      next++
+    }
+    byId[s.id] = costume
+    return { ...s, costume }
+  })
+  // Keep the book small: the newest 500.
+  const ids = Object.keys(byId)
+  for (const id of ids.slice(0, Math.max(0, ids.length - 500))) delete byId[id]
+  return { list: out, book: { byId, next } }
 }

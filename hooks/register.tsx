@@ -1,30 +1,39 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CrewPanel, CrewSession, CrewStatus } from '../types'
+import type { CrewImport, CrewPanel, CrewSession, CrewStatus } from '../types'
 import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
 import {
   assignCostumes,
+  describeFilter,
+  giveCostumes,
   isWithdrawn,
+  listedToPatch,
+  normalizeListed,
   parseFaceRules,
-  parseListedSessions,
+  parseImportArgs,
+  parseListing,
   parsePromptText,
   parseStartResult,
+  selectForImport,
   timeLabel,
-  upsert,
   upsertAll,
 } from './parse'
-import type { Patch } from './parse'
+import { mergeBooks } from './parse'
+import type { CostumeBook, Listed, Patch } from './parse'
 
 const crew = atom({ plugin: 'session-crew', key: 'crew' } as const, [])
 const panel = atom({ plugin: 'session-crew', key: 'panel' } as const, { isCompact: false, isDoneHidden: false })
 const poll = atom({ plugin: 'session-crew', key: 'poll' } as const, { isAvailable: true, lastAt: 0 })
 const now = atom({ plugin: 'session-crew', key: 'now' } as const, 0)
 const faces = atom({ plugin: 'session-crew', key: 'faces' } as const, {})
+const listing = atom({ plugin: 'session-crew', key: 'listing' } as const, [])
+const importing = atom({ plugin: 'session-crew', key: 'importing' } as const, null)
 
 const PANE = 'session-crew'
 const TITLE = 'Session crew'
 const STATUS_TOOL = 'mcp__session-crew__status'
+const SYNC_TOOL = 'mcp__session-crew__sync'
 const START = 'mcp__ccd_session__start_session'
 const DISMISS = 'mcp__ccd_session__dismiss_task'
 const LIST = 'mcp__ccd_session_mgmt__list_sessions'
@@ -32,6 +41,12 @@ const GET = 'mcp__ccd_session_mgmt__get_session'
 // The desktop app's session-management server, as /mcp names it.
 const MGMT_SERVER = 'ccd_session_mgmt'
 const STORE_FACES = 'session-crew.faces'
+const STORE_IMPORT = 'session-crew.import'
+const STORE_COSTUMES = 'session-crew.costumes'
+// A refresh on each prompt, at most this often.
+const PROMPT_REFRESH_MS = 15_000
+// After a failed fetch, wait this long before the timer or a prompt tries again.
+const RETRY_MS = 60_000
 
 const COLOR: Record<CrewStatus, string> = {
   working: '#378ADD',
@@ -55,10 +70,35 @@ const textOf = (r: { text?: string; result?: unknown }): string =>
 // ---------------------------------------------------------------------------
 // Merging into state, then the status line.
 
-async function apply($: EngineInterface, patches: Patch[], source: string, weak = false): Promise<CrewSession[]> {
+// Merges run one at a time in this session, so two never hand out costumes from the same book.
+// (A module variable is fine: a reload starts a fresh chain, and the state it guards is the host's.)
+let applying: Promise<unknown> = Promise.resolve()
+
+function apply($: EngineInterface, patches: Patch[], source: string, weak = false): Promise<CrewSession[]> {
+  const run = applying.then(() => applyNow($, patches, source, weak))
+  applying = run.catch(() => undefined)
+  return run
+}
+
+async function readBook($: EngineInterface): Promise<CostumeBook> {
+  const stored = (await $.store.get(STORE_COSTUMES)) as CostumeBook | undefined
+  return stored && typeof stored === 'object' && stored.byId && typeof stored.next === 'number' ? stored : { byId: {}, next: 0 }
+}
+
+async function applyNow($: EngineInterface, patches: Patch[], source: string, weak: boolean): Promise<CrewSession[]> {
   if (!patches.length) return read($, crew)
   const at = await $.clock.now()
-  const list = await update($, crew, l => upsertAll(l, patches, at, source, weak))
+  const book = await readBook($)
+  let nextBook: CostumeBook | null = null
+  // New rows get the costume the book has for them (from any earlier session), else the next one in turn.
+  const list = await update($, crew, l => {
+    const merged = upsertAll(l, patches, at, source, weak)
+    const given = giveCostumes(merged, book)
+    nextBook = given?.book ?? null
+    return given?.list ?? merged
+  })
+  // Another session's panel may have written the book since: keep what it added.
+  if (nextBook) await $.store.set(STORE_COSTUMES, mergeBooks(await readBook($), nextBook))
   await update($, now, () => at)
   showStatus($, list)
   return list
@@ -70,31 +110,97 @@ function showStatus($: EngineInterface, list: CrewSession[]): void {
   $.ui.status(parts.length ? `crew: ${parts.join(' · ')}` : undefined)
 }
 
-// A list_sessions or get_session result. A plain list holds every session the
-// person has, so only a linked list (or one session asked by id) adds rows.
-async function ingestListed($: EngineInterface, text: string, isOk: boolean, isLinked: boolean): Promise<void> {
-  if (!isOk) return
-  const known = new Set((await read($, crew)).map(s => s.id))
-  const patches = parseListedSessions(text).filter(p => isLinked || (p.id !== undefined && known.has(p.id)))
-  await apply($, patches, 'list_sessions', true)
+// A list_sessions or get_session result, from the model's call or the mod's own.
+// A plain list holds every session the person has, so it adds only the rows the
+// crew knows, or that the /crew import filter picks; a linked list adds them all.
+async function ingestListed($: EngineInterface, text: string, isOk: boolean, isLinked: boolean, isListing: boolean): Promise<number> {
+  if (!isOk) return 0
+  const rows = parseListing(text)
+  if (!rows) return 0
+  // Only list_sessions is a listing for sync to import from; get_session is one row.
+  if (isListing) await update($, listing, () => rows.slice(0, 200))
+  return ingestRows($, rows, isLinked, 'list_sessions')
 }
 
-// Asks the desktop app itself, when a mod can reach its session server.
-async function pollSessions($: EngineInterface): Promise<string> {
-  const at = await $.clock.now()
+async function ingestRows($: EngineInterface, rows: Listed[], isLinked: boolean, source: string): Promise<number> {
+  const f = await read($, importing)
+  const known = new Set((await read($, crew)).map(s => s.id))
+  const picked = new Set(f ? selectForImport(rows, f).map(r => r.id) : [])
+  const patches = rows
+    .filter(r => isLinked || known.has(r.id) || picked.has(r.id))
+    .map(r => ({ ...listedToPatch(r), isImported: !isLinked && !known.has(r.id) }))
+  await apply($, patches, source, true)
+  return picked.size
+}
+
+// The mod's own list_sessions: the app's MCP server directly, else a tool call
+// through the session's own loop (the server lives in the desktop app, which a
+// mod may not reach directly).
+async function fetchListing($: EngineInterface, args: Record<string, unknown>): Promise<{ rows: Listed[]; via: 'mcp' | 'tool' } | { error: string }> {
+  const errors: string[] = []
   try {
-    const r = await $.mcp.call(MGMT_SERVER, 'list_sessions', { linked: true, limit: 50 })
+    const r = await $.mcp.call(MGMT_SERVER, 'list_sessions', args)
     const text = r.content.map(b => ('text' in b && typeof b.text === 'string' ? b.text : '')).join('')
-    if (r.isError) throw new Error(text.slice(0, 200) || 'isError')
-    const patches = parseListedSessions(text)
-    await update($, poll, () => ({ isAvailable: true, lastAt: at }))
-    await apply($, patches, 'poll', true)
-    return `polled ${patches.length} linked sessions`
+    const rows = r.isError ? null : parseListing(text)
+    if (rows) return { rows, via: 'mcp' }
+    errors.push(`mcp: ${text.slice(0, 160)}`)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    await update($, poll, () => ({ isAvailable: false, lastAt: at, lastError: message.slice(0, 300) }))
-    return `poll failed: ${message.slice(0, 200)}`
+    errors.push(`mcp: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`)
   }
+  try {
+    const r = await $.tool.call({ tool: LIST, ...args } as never)
+    if (r.deny !== undefined) errors.push(`tool: denied: ${r.deny.slice(0, 160)}`)
+    else if (r.isError) errors.push(`tool: ${textOf(r).slice(0, 160)}`)
+    else {
+      const rows = parseListing(textOf(r))
+      if (rows) return { rows, via: 'tool' }
+      errors.push(`tool: not a session list: ${textOf(r).slice(0, 120)}`)
+    }
+  } catch (err) {
+    errors.push(`tool: ${(err instanceof Error ? err.message : String(err)).slice(0, 160)}`)
+  }
+  return { error: errors.join('; ') }
+}
+
+// One fetch at a time: a prompt or a tick while one is out joins it, so an older answer
+// can never land after a newer one.
+let refreshing: Promise<string> | null = null
+
+/** Fetches the sessions and merges them: the import filter's when one is set, else the linked family. */
+function refresh($: EngineInterface): Promise<string> {
+  if (!refreshing) {
+    refreshing = refreshNow($).finally(() => {
+      refreshing = null
+    })
+  }
+  return refreshing
+}
+
+async function refreshNow($: EngineInterface): Promise<string> {
+  const f = await read($, importing)
+  const args: Record<string, unknown> = f ? { limit: 100, ...(f.includeArchived ? { include_archived: true } : {}) } : { linked: true, limit: 50 }
+  const at = await $.clock.now()
+  // Taken now, so the throttles see this attempt while it is out.
+  await update($, poll, p => ({ ...p, lastAt: at }))
+  const got = await fetchListing($, args)
+  if ('error' in got) {
+    await update($, poll, () => ({ isAvailable: false, lastAt: at, lastError: got.error.slice(0, 400) }))
+    return `could not list sessions (${got.error.slice(0, 200)})`
+  }
+  await update($, poll, () => ({ isAvailable: true, via: got.via, lastAt: at }))
+  await update($, listing, () => got.rows.slice(0, 200))
+  const n = await ingestRows($, got.rows, !f, f ? 'import' : 'poll')
+  return f ? `imported ${n} sessions (${describeFilter(f)}); ${got.rows.length} listed` : `refreshed ${got.rows.length} linked sessions`
+}
+
+const importPrompt = (f: CrewImport): string => {
+  const args = { limit: 100, ...(f.includeArchived ? { include_archived: true } : {}) }
+  const sync = { ...(f.parent ? { parent: f.parent } : {}), ...(f.match ? { match: f.match } : {}), ...(f.includeArchived ? { includeArchived: true } : {}) }
+  return (
+    `session-crew import (${describeFilter(f)}): call mcp__ccd_session_mgmt__list_sessions with ${JSON.stringify(args)}, ` +
+    `then call mcp__session-crew__sync with ${JSON.stringify(sync)}; leave out "sessions", the mod reads the list itself. ` +
+    `Then reply with the sync result in one line and nothing else.`
+  )
 }
 
 // Faces set with /crew face win over the `faces` option.
@@ -188,11 +294,14 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     const stored = (await $.store.get(STORE_FACES)) as Record<string, string> | undefined
     if (stored && typeof stored === 'object') await update($, faces, () => ({ ...stored }))
+    const imp = (await $.store.get(STORE_IMPORT)) as CrewImport | null | undefined
+    if (imp && typeof imp === 'object') await update($, importing, () => imp)
 
     await $.command.register({
       name: 'crew',
-      description: 'Show or hide the side-session crew. Also: /crew face <name-or-glob> <costume>, /crew faces, /crew refresh, /crew clear, /crew compact',
-      argumentHint: '[face <pattern> <face> | faces | refresh | clear | compact]',
+      description:
+        'Show or hide the side-session crew. Also: /crew import [parent <id>] [<glob>] [--archived] | off, /crew face <name-or-glob> <costume>, /crew faces, /crew refresh, /crew clear, /crew compact',
+      argumentHint: '[import … | face <pattern> <costume> | faces | refresh | clear | compact]',
     })
     await $.tool.register({
       name: 'status',
@@ -222,6 +331,40 @@ export const register: Register = (on, options) => {
       },
     })
 
+    await $.tool.register({
+      name: 'sync',
+      description:
+        'Import existing side sessions into the session-crew panel (what /crew import asks for). Call ' +
+        'mcp__ccd_session_mgmt__list_sessions first and leave out `sessions`: the mod reads that result itself. ' +
+        'Filters: `parent` (only sessions that session id started), `match` (a glob on name or title), `includeArchived`. ' +
+        'The filter is kept, so later list_sessions results keep the imported sessions fresh.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          parent: { type: 'string', description: 'Only sessions whose startedBy is this local_… id.' },
+          match: { type: 'string', description: 'Only sessions whose name or title matches this glob (* and ?).' },
+          includeArchived: { type: 'boolean', description: 'Also import archived sessions (as done). Default false.' },
+          sessions: {
+            type: 'array',
+            description: 'Only when the list is not from list_sessions in this turn: rows of {id, name, title, status, startedBy, prNumber}.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                title: { type: 'string' },
+                status: { type: 'string', enum: ['working', 'idle', 'done'] },
+                startedBy: { type: 'string' },
+                prNumber: { type: 'integer' },
+                isArchived: { type: 'boolean' },
+              },
+              required: ['id'],
+            },
+          },
+        },
+      },
+    })
+
     // Elapsed times and terminal frames, only while the pane is up and someone is busy or asleep.
     $.clock.every(1000, () => {
       void (async () => {
@@ -236,14 +379,25 @@ export const register: Register = (on, options) => {
       $.clock.every(pollMs, () => {
         void (async () => {
           const p = await read($, poll)
-          if (!p.isAvailable) return
+          const at = await $.clock.now()
+          // A failed fetch is retried now and then, crew or no crew: the app's server may simply not have been up yet.
+          if (!p.isAvailable) {
+            if (at - p.lastAt >= RETRY_MS) await refresh($)
+            return
+          }
           const list = await read($, crew)
-          if (list.some(s => s.status === 'working')) await pollSessions($)
+          if (list.some(s => s.status === 'working') || (await read($, importing))) await refresh($)
         })()
       })
-      // One look at start, to seed the crew from the app.
-      $.clock.after(1500, () => void pollSessions($))
     }
+    // One look at start, to seed the crew from the app (and the /crew import filter, if one is kept);
+    // early in a session the app's session server may still be connecting, so once more a little later.
+    $.clock.after(1500, () => {
+      void (async () => {
+        await refresh($)
+        if (!(await read($, poll)).isAvailable) $.clock.after(10_000, () => void refresh($))
+      })()
+    })
     showStatus($, await read($, crew))
     return started
   })
@@ -275,7 +429,28 @@ export const register: Register = (on, options) => {
       ]
       return { text: lines.length ? lines.join('\n') : 'No crew or rules yet.' }
     }
-    if (sub === 'refresh') return { text: await pollSessions($) }
+    if (sub === 'import') {
+      const parsed = parseImportArgs(rest)
+      if (typeof parsed === 'object' && 'error' in parsed)
+        return { text: `${parsed.error}. Usage: /crew import [parent <local_id>] [<name-glob>] [--archived], or /crew import off` }
+      if (parsed === 'off') {
+        await update($, importing, () => null)
+        await $.store.set(STORE_IMPORT, null)
+        return { text: 'Stopped importing. Imported sessions stay until /crew clear; new sessions start without an import.' }
+      }
+      await update($, importing, () => parsed)
+      await $.store.set(STORE_IMPORT, parsed)
+      // A refresh already out fetched for the old filter: let it land, then fetch for this one.
+      if (refreshing) await refreshing.catch(() => undefined)
+      const result = await refresh($)
+      if ((await read($, poll)).isAvailable) return { text: result }
+      // The mod cannot list sessions itself here: Claude does, and the sync tool reads the result.
+      // Submitted from a timer: a prompt from inside this command would wait on the turn it holds.
+      const text = importPrompt(parsed)
+      $.clock.after(250, () => void $.prompt.submit({ text }))
+      return { text: `Asking Claude to list your sessions (${describeFilter(parsed)}); the crew fills in when it calls sync.` }
+    }
+    if (sub === 'refresh') return { text: await refresh($) }
     if (sub === 'clear') {
       await update($, crew, l => l.filter(s => s.status !== 'done' && s.status !== 'dismissed'))
       showStatus($, await read($, crew))
@@ -288,7 +463,7 @@ export const register: Register = (on, options) => {
     if (sub === 'debug') {
       const p = await read($, poll)
       const list = await read($, crew)
-      return { text: JSON.stringify({ poll: p, crew: list }, null, 2) }
+      return { text: JSON.stringify({ poll: p, importing: await read($, importing), crew: list }, null, 2) }
     }
     const isOpen = await togglePane($)
     return { text: isOpen ? 'Session crew opened.' : 'Session crew closed.' }
@@ -317,13 +492,13 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: LIST }, async ($, e, next) => {
     const r = await next(e)
-    await ingestListed($, textOf(r), r.deny === undefined && !r.isError, (e as unknown as { linked?: boolean }).linked === true)
+    await ingestListed($, textOf(r), r.deny === undefined && !r.isError, (e as unknown as { linked?: boolean }).linked === true, true)
     return r
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: GET }, async ($, e, next) => {
     const r = await next(e)
-    await ingestListed($, textOf(r), r.deny === undefined && !r.isError, true)
+    await ingestListed($, textOf(r), r.deny === undefined && !r.isError, true, false)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -332,6 +507,25 @@ export const register: Register = (on, options) => {
     const patches = (input.sessions ?? []).filter(p => p && (p.id || p.name))
     const list = await apply($, patches, 'tool')
     return { result: `ok: ${list.length} in the crew` }
+  })
+
+  on('tool.call', { tool: SYNC_TOOL }, async ($, e) => {
+    const input = e as unknown as { sessions?: unknown[]; parent?: string; match?: string; includeArchived?: boolean }
+    const f: CrewImport = {
+      ...(typeof input.parent === 'string' && input.parent ? { parent: input.parent } : {}),
+      ...(typeof input.match === 'string' && input.match ? { match: input.match } : {}),
+      ...(input.includeArchived === true ? { includeArchived: true } : {}),
+    }
+    const isGiven = Array.isArray(input.sessions)
+    const rows = isGiven ? normalizeListed(input.sessions ?? []) : await read($, listing)
+    if (!rows.length)
+      return { result: isGiven ? 'nothing to import: the sessions given hold no local_… ids' : 'nothing to import: call mcp__ccd_session_mgmt__list_sessions first (limit 100), then sync again' }
+    await update($, importing, () => f)
+    await $.store.set(STORE_IMPORT, f)
+    const n = await ingestRows($, rows, false, 'sync')
+    const p = await read($, poll)
+    const live = p.via ? `the mod refreshes them itself (via ${p.via === 'mcp' ? "the app's MCP server" : 'a tool call'})` : 'they refresh when list_sessions runs again'
+    return { result: `imported ${n} of ${rows.length} sessions (${describeFilter(f)}) from ${isGiven ? 'the rows given' : 'the last list_sessions'}; ${live}` }
   })
 
   // --- what the app writes into this session's prompts ---------------------
@@ -345,6 +539,12 @@ export const register: Register = (on, options) => {
       if (e.agentId || m.role !== 'user' || !['prompt', 'delivery', 'attachment', 'hook-context'].includes(e.door)) return r
       const text = m.content.map(b => (b.type === 'text' ? b.text : '')).join('\n')
       await apply($, parsePromptText(text), 'linked-note')
+      // Imported sessions aren't in the linked note: refresh them with each prompt, when the mod can list sessions itself.
+      if (e.door === 'prompt' && (await read($, importing))) {
+        const p = await read($, poll)
+        const at = await $.clock.now()
+        if (at - p.lastAt > (p.isAvailable ? PROMPT_REFRESH_MS : RETRY_MS)) $.clock.after(0, () => void refresh($))
+      }
     } catch {
       // A row we could not read changes nothing.
     }
@@ -380,17 +580,17 @@ export const register: Register = (on, options) => {
             onPress={() => update($, panel, v => ({ ...v, isDoneHidden: !v.isDoneHidden }))}
           />
         )}
-        <Button key="refresh" label="Refresh" plain onPress={() => void pollSessions($)} />
+        <Button key="refresh" label="Refresh" plain onPress={() => void refresh($)} />
       </Box>
     )
     const empty = (
       <Text key="empty" dimColor>
-        No side sessions yet. They appear when this session starts or proposes one, or when the app reports linked sessions.
+        No side sessions yet. They appear when this session starts or proposes one, or when the app reports linked sessions; /crew import brings in ones that already exist.
       </Text>
     )
     const pollNote = !pl.isAvailable && pl.lastAt ? (
       <Text key="poll" dimColor>
-        Live polling unavailable; updates arrive with each prompt.
+        Can't list sessions right now ({pl.lastError?.slice(0, 80) ?? 'no answer'}); retrying about once a minute. Updates also arrive with each prompt.
       </Text>
     ) : null
 

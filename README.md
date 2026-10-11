@@ -29,7 +29,8 @@ sessions) and **Refresh**. The status line also carries `crew: 2 working · 1 sl
 - `/crew`: show or hide the pane
 - `/crew face <name-or-glob> <costume>`: dress matching sessions (kept across sessions in `$.store`); without a costume it removes the rule
 - `/crew faces`: list the rules and who wears what
-- `/crew refresh`: ask the app for the linked sessions now
+- `/crew import [parent <local_id>] [<name-glob>] [--archived]`: bring in sessions that already exist (see below); `/crew import off` stops
+- `/crew refresh`: ask the app for the sessions now
 - `/crew compact`: toggle the crabs-only strip
 - `/crew clear`: drop finished sessions
 - `/crew debug`: dump the crew and poll state as JSON
@@ -57,6 +58,29 @@ Sessions without a rule take the first six in turn. By status:
 `prefers-reduced-motion` stops every animation and keeps the poses. The terminal draws
 savvy-progress's `▣` in the costume's color, with a spinner, `zZz` or `\o/` beside it.
 
+## Importing sessions that already exist
+
+A session's panel starts with only the sessions *it* starts (and the family the app lists in its
+"Linked sessions now" note). Sessions started from an older session, before the mod was loaded, come in with `/crew import`:
+
+```text
+/crew import                                   every open session
+/crew import parent local_bf88e5a0-…           only sessions that session started
+/crew import nut-*                             only names or titles matching the glob
+/crew import parent local_bf88e5a0-… --archived   archived ones too (shown as done)
+/crew import off                               stop importing in new sessions
+```
+
+The mod lists the sessions itself (`list_sessions` through the app's MCP server, else through a
+tool call in the session's loop) and imports at once. Where it can't, it asks Claude to call
+`mcp__ccd_session_mgmt__list_sessions` and then `mcp__session-crew__sync`, which reads that result
+(the model doesn't repeat the list).
+
+The filter is kept in `$.store`, so **every new session imports with it by itself** at start, and keeps
+imported sessions fresh: on each prompt (at most every 15 s), on the poll timer, and whenever
+`list_sessions` runs. Archived sessions stay out unless `--archived`. Each session's crab is recorded in
+`$.store` the first time it gets one, so it wears the same costume in every session's panel.
+
 ## How it learns the status
 
 The app has no "session status changed" event a mod can hook, so the mod reads
@@ -70,10 +94,14 @@ everything the app already tells the session:
    `The user started your proposal task_… ("…") as session local_…` into the user-side text of each prompt
    and delivery it sends. The mod parses those rows (never tool results) and takes them as the authority,
    including `done`.
-3. **Polling**: every `pollSeconds` (default 30) while any session works, `$.mcp.call('ccd_session_mgmt', 'list_sessions', { linked: true })`.
-   If the app's server can't be reached from a mod, polling turns itself off and the pane says so.
+3. **Polling**: at start, then every `pollSeconds` (default 30) while any session works or an import filter
+   is set, `$.mcp.call('ccd_session_mgmt', 'list_sessions', …)` (linked family, or the import's list),
+   falling back to `$.tool.call`. Early in a session the app's server may still be connecting: a failed
+   fetch is tried again after 10 s, then about once a minute, and the pane says so meanwhile.
 4. **`mcp__session-crew__status`**, a tool the mod registers, for Claude to report a status the mod missed:
    `{ "sessions": [{ "id": "local_…", "name": "…", "status": "idle", "note": "PR #12" }] }`.
+5. **`mcp__session-crew__sync`**, the import tool: `{ "parent": "local_…", "match": "glob", "includeArchived": false }`,
+   importing from the last `list_sessions` result, or from `sessions: [{ id, name, title, status, startedBy, prNumber }]`.
 
 ## Options (`pluginConfigs`)
 
