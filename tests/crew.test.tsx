@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { CRAB_CSS, crab } from '../hooks/crab'
-import { cardOf, layoutStrip, textW } from '../hooks/band'
+import { TERM_GAP, cardOf, cells, fitTerminalRow, layoutStrip, termCardCells, textW } from '../hooks/band'
 import {
   assignCostumes,
   giveCostumes,
@@ -288,6 +288,22 @@ describe('the strip above the prompt', () => {
       expect(r.summary).toBe('● 3')
     }
     expect(layoutStrip(2000, items, make, 1.5, n => stripSummary(items, n)).shown).toBe(3)
+  })
+
+  test('the terminal row never runs past its columns', () => {
+    const list = upsertAll([], [1, 2, 3, 4, 5].map(n => ({ id: `local_00000000-0000-0000-0000-00000000000${n}`, name: `s${n}`, title: n === 5 ? '你好世界任务' : `Session number ${n}`, status: (n === 2 ? 'idle' : 'working') as 'idle' | 'working' })), 0, 't')
+    const late = upsertAll(list, [{ id: 'local_00000000-0000-0000-0000-000000000002', status: 'idle' }, { id: 'local_00000000-0000-0000-0000-000000000002', status: 'working' }], 1, 't')
+    const items = stripItems(upsertAll(late, [{ id: 'local_00000000-0000-0000-0000-000000000002', status: 'idle' }], 2, 't'), 3, 0, T)
+    const card = (i: (typeof items)[number]) => termCardCells(i.pose, i.session.title, pillText(i, 3))
+    const rowCells = (r: ReturnType<typeof fitTerminalRow>) =>
+      r.shown.reduce((w, i) => w + card(i), 0) + (r.more ? cells(`+${r.more} more`) : 0) + cells(r.summary) + TERM_GAP * (r.shown.length + (r.more ? 1 : 0))
+    for (const cols of [20, 34, 40, 60, 80, 100, 140, 220]) {
+      const r = fitTerminalRow(items, cols, card, n => stripSummary(items, n))
+      if (r.shown.length) expect(rowCells(r)).toBeLessThanOrEqual(cols)
+      expect(r.shown.length + r.more).toBe(items.length)
+    }
+    expect(fitTerminalRow(items, 400, card, n => stripSummary(items, n)).shown.length).toBe(5)
+    expect(fitTerminalRow(items, 400, card, n => stripSummary(items, n)).summary).toContain('sessions')
   })
 
   test('wide characters measure about an em each', () => {
@@ -628,6 +644,39 @@ describe('hooks', () => {
     await clock.advance(5_000)
     expect(calls).toBe(0)
     expect((await $.command.run({ command: 'crew', args: 'labels' } as never)).text).toContain('pool: Pool health')
+  })
+
+  test('the drawn terminal strip fits its columns', { options: { pollSeconds: 0 } }, async ($, on) => {
+    host(on)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+    await $.tool.call({
+      tool: 'mcp__session-crew__status',
+      sessions: [1, 2, 3, 4].map(n => ({ id: `local_00000000-0000-0000-0000-00000000000${n}`, name: `s${n}`, title: `Session number ${n} with a long title`, status: 'working' })),
+    } as never)
+    for (const cols of [30, 50, 80, 120]) {
+      const ui = await $.ui.mount({
+        plugin: 'session-crew',
+        surface: 'terminal',
+        component: 'AbovePrompt',
+        props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: cols, scroll: { bodyRows: 9, offset: 0, total: 0 } },
+      } as never)
+      const texts = await ui.findAll({ type: 'Text' })
+      // A card is the outer Text that starts with its crab glyph; its parts are nested Texts.
+      const cards = texts.filter(t => t.text.startsWith('▣ '))
+      const more = texts.find(t => /^\+\d+ more$/.test(t.text))
+      const button = await ui.find({ type: 'Button', key: 'session-crew-open' })
+      const parts = [...cards.map(t => t.text), ...(more ? [more.text] : []), button?.text ?? '']
+      const drawn = parts.reduce((w, t) => w + cells(t), 0) + TERM_GAP * (parts.length - 1)
+      if (cards.length) {
+        // A card's text is the whole card, its nested pill included, or this would measure nothing.
+        expect(cards[0]?.text).toMatch(/^▣ Session.* working <1m$/)
+        expect(drawn).toBeLessThanOrEqual(cols)
+      }
+      expect(button).toBeDefined()
+      if (cols >= 80) expect(cards.length).toBeGreaterThan(0)
+      await ui.unmount()
+    }
   })
 
   test('the status tool and /crew face', { options: { pollSeconds: 0 } }, async ($, on) => {

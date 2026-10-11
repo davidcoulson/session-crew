@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CrewImport, CrewPanel, CrewSession, CrewStatus } from '../types'
 import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
-import { CSS, FONT, PILL_COLOR, cardOf, layoutStrip, xml } from './band'
+import { CSS, FONT, PILL_COLOR, TERM_GAP, cardOf, fitTerminalRow, layoutStrip, termCardCells, xml } from './band'
 import {
   assignCostumes,
   describeFilter,
@@ -748,30 +748,19 @@ export const register: Register = (on, options) => {
       )
     }
 
-    // Terminal: the same cards in text, `▣ Label` and a coloured pill in words, sized to the
-    // columns with room kept for the summary and the "+N more" (gaps of 2 between them).
+    // Terminal: the same cards in text, `▣ Label` and a coloured pill in words, the row
+    // sized in cells to the columns (fitTerminalRow, beside the summary and "+N more").
     const cols = e.props.bodyColumns || 80
-    const textCard = (i: StripItem) => 2 + label(i.session).length + 3 + pillText(i, at).length + 2
-    const fitTerminal = (isNarrow: boolean) => {
-      const summary = stripSummary(items, isNarrow)
-      let used = summary.length + 2
-      let fit = 0
-      for (const i of items) {
-        const moreRoom = fit + 1 < items.length ? 12 : 0
-        if (used + textCard(i) + moreRoom > cols) break
-        used += textCard(i)
-        fit++
-      }
-      return { summary, ...stripShown(items, fit, 6, isNarrow ? 0 : 1) }
-    }
-    const wide = fitTerminal(false)
-    const terminal = wide.more === 0 ? wide : fitTerminal(true)
-    const { shown, more } = terminal.shown.length >= wide.shown.length ? terminal : wide
-    const termSummary = terminal.shown.length >= wide.shown.length ? terminal.summary : wide.summary
+    const { shown, more, summary: termSummary } = fitTerminalRow(
+      items,
+      cols,
+      i => termCardCells(i.pose, label(i.session), pillText(i, at)),
+      isNarrow => stripSummary(items, isNarrow),
+    )
     bandLog.drew = shown.length
     return (
       <Box flexDirection="column">
-        <Box key="session-crew-strip" flexDirection="row" gap={2}>
+        <Box key="session-crew-strip" flexDirection="row" gap={TERM_GAP}>
           {shown.map(i => (
             <Text key={i.session.id} wrap="truncate-end">
               <Text color={COSTUME_COLOR[costumeOf.get(i.session.id) ?? 'other']}>▣</Text> <Text bold={i.pose !== 'finished'} dimColor={i.pose === 'finished'}>{label(i.session)}</Text>{' '}

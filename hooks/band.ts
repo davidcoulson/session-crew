@@ -152,3 +152,46 @@ export function fitCards(W: number, items: StripItem[], make: (i: StripItem) => 
 
 export const PILL_COLOR: Record<StripPose, string> = { needs: '#D85A30', working: '#378ADD', idle: '#8a8a86', done: '#3B9C5F', finished: '#3B9C5F' }
 
+
+// --- the terminal's strip: the same cards in text, sized in cells.
+
+/** Terminal cells a text takes: wide characters (CJK, emoji) two. */
+export const cells = (text: string): number => [...text].reduce((n, ch) => n + (isWide(ch) ? 2 : 1), 0)
+
+/**
+ * One terminal card's cells, as register.tsx draws it: `▣ Label `, the pill's
+ * glyph (` !` for needs-you), a space and the pill's words, needs-you padded
+ * by one more since it draws inverse.
+ */
+export const termCardCells = (pose: StripPose, label: string, pill: string): number =>
+  2 + cells(label) + 1 + (pose === 'needs' ? 2 : 1) + 1 + cells(pill) + (pose === 'needs' ? 1 : 0)
+
+/** Cells between the row's parts (the Box's gap). */
+export const TERM_GAP = 2
+
+/**
+ * The terminal row that fits `cols`: the most cards that fit beside the
+ * summary and the "+N more", the full summary on a tie, else the counts; with
+ * no room for any card, the counts alone (with the "+N more").
+ */
+export function fitTerminalRow(
+  items: StripItem[],
+  cols: number,
+  cardCells: (i: StripItem) => number,
+  summary: (isNarrow: boolean) => string,
+): { shown: StripItem[]; more: number; summary: string } {
+  const width = (shown: StripItem[], more: number, text: string): number => {
+    const parts = shown.length + (more ? 1 : 0) + 1
+    return shown.reduce((w, i) => w + cardCells(i), 0) + (more ? cells(`+${more} more`) : 0) + cells(text) + TERM_GAP * (parts - 1)
+  }
+  for (let k = items.length; k >= 0; k--) {
+    for (const isNarrow of [false, true]) {
+      const text = summary(isNarrow)
+      const { shown, more } = stripShown(items, k, 6, 0)
+      if (shown.length < k) continue
+      if (width(shown, more, text) <= cols) return { shown, more, summary: text }
+    }
+  }
+  const { shown, more } = stripShown(items, 0, 6, 0)
+  return { shown, more, summary: summary(true) }
+}
