@@ -78,7 +78,9 @@ tool call in the session's loop) and imports at once. Where it can't, it asks Cl
 
 The filter is kept in `$.store`, so **every new session imports with it by itself** at start, and keeps
 imported sessions fresh: on each prompt (at most every 15 s), on the poll timer, and whenever
-`list_sessions` runs. Archived sessions stay out unless `--archived`. Each session's crab is recorded in
+`list_sessions` runs. Archived sessions stay out unless `--archived`; an imported session that gets archived (it drops off a
+complete list of open sessions) turns done, and comes back if it is unarchived. `/crew import off` stops new
+imports, while the sessions already imported keep refreshing until they're done or `/crew clear` drops them. Each session's crab is recorded in
 `$.store` the first time it gets one, so it wears the same costume in every session's panel.
 
 ## How it learns the status

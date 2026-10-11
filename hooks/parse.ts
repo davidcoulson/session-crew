@@ -167,6 +167,23 @@ export const describeFilter = (f: ImportFilter): string =>
     .filter(Boolean)
     .join(', ') || 'every open session'
 
+const ARCHIVED = 'archived'
+
+/**
+ * Imported sessions a complete list of the open sessions leaves out have been
+ * archived (or deleted): they are done. Without this one archived while
+ * working would show working for good, since nothing else reports it.
+ */
+export function missingAsArchived(crew: readonly CrewSession[], rows: readonly Listed[]): Patch[] {
+  const listed = new Set(rows.map(r => r.id))
+  return crew
+    .filter(s => s.isImported && s.id.startsWith('local_') && !listed.has(s.id) && s.status !== 'done' && s.status !== 'dismissed')
+    .map(s => ({ id: s.id, status: 'done' as const, note: ARCHIVED }))
+}
+
+/** An imported session still in play, which only list_sessions keeps up to date. */
+export const isLiveImport = (s: CrewSession): boolean => !!s.isImported && s.status !== 'done' && s.status !== 'dismissed'
+
 export function selectForImport(rows: readonly Listed[], f: ImportFilter): Listed[] {
   const re = f.match ? globRe(f.match) : null
   return rows.filter(
@@ -247,7 +264,9 @@ export function upsert(input: CrewSession[], p: Patch, at: number, source: strin
   }
   const prev = list[idx] as CrewSession
   let status = p.status ?? prev.status
-  if (weak && prev.status === 'done' && status === 'idle') status = 'done'
+  // A list knows running or not, never done: it doesn't undo a done, except one it inferred
+  // itself from an archive (`missingAsArchived`) that was since undone.
+  if (weak && prev.status === 'done' && status === 'idle' && prev.note !== ARCHIVED) status = 'done'
   if (prev.status === 'dismissed' && status === 'proposed') status = 'dismissed'
   const changed = status !== prev.status
   const next: CrewSession = {

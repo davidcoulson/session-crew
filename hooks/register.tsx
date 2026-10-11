@@ -7,8 +7,10 @@ import {
   assignCostumes,
   describeFilter,
   giveCostumes,
+  isLiveImport,
   isWithdrawn,
   listedToPatch,
+  missingAsArchived,
   normalizeListed,
   parseFaceRules,
   parseImportArgs,
@@ -113,23 +115,30 @@ function showStatus($: EngineInterface, list: CrewSession[]): void {
 // A list_sessions or get_session result, from the model's call or the mod's own.
 // A plain list holds every session the person has, so it adds only the rows the
 // crew knows, or that the /crew import filter picks; a linked list adds them all.
-async function ingestListed($: EngineInterface, text: string, isOk: boolean, isLinked: boolean, isListing: boolean): Promise<number> {
+async function ingestListed($: EngineInterface, text: string, isOk: boolean, isLinked: boolean, isComplete: boolean, isListing: boolean): Promise<number> {
   if (!isOk) return 0
   const rows = parseListing(text)
   if (!rows) return 0
   // Only list_sessions is a listing for sync to import from; get_session is one row.
   if (isListing) await update($, listing, () => rows.slice(0, 200))
-  return ingestRows($, rows, isLinked, 'list_sessions')
+  return ingestRows($, rows, isLinked, isComplete, 'list_sessions')
 }
 
-async function ingestRows($: EngineInterface, rows: Listed[], isLinked: boolean, source: string): Promise<number> {
+/**
+ * Merges listed rows. `isComplete`: the rows are every open session (no linked
+ * or group filter, fewer than the limit), so an imported one missing is archived.
+ */
+async function ingestRows($: EngineInterface, rows: Listed[], isLinked: boolean, isComplete: boolean, source: string): Promise<number> {
   const f = await read($, importing)
-  const known = new Set((await read($, crew)).map(s => s.id))
+  const list = await read($, crew)
+  const known = new Set(list.map(s => s.id))
   const picked = new Set(f ? selectForImport(rows, f).map(r => r.id) : [])
   const patches = rows
     .filter(r => isLinked || known.has(r.id) || picked.has(r.id))
     .map(r => ({ ...listedToPatch(r), isImported: !isLinked && !known.has(r.id) }))
   await apply($, patches, source, true)
+  // Not weak: inferring the archive is ours, with its note, which lets an unarchived session come back.
+  if (isComplete) await apply($, missingAsArchived(list, rows), source)
   return picked.size
 }
 
@@ -176,9 +185,13 @@ function refresh($: EngineInterface): Promise<string> {
   return refreshing
 }
 
+const FULL_LIMIT = 100
+
 async function refreshNow($: EngineInterface): Promise<string> {
   const f = await read($, importing)
-  const args: Record<string, unknown> = f ? { limit: 100, ...(f.includeArchived ? { include_archived: true } : {}) } : { linked: true, limit: 50 }
+  // Imported sessions aren't in the linked family: while any is in play (even after /crew import off), list them all.
+  const isFull = !!f || (await read($, crew)).some(isLiveImport)
+  const args: Record<string, unknown> = isFull ? { limit: FULL_LIMIT, ...(f?.includeArchived ? { include_archived: true } : {}) } : { linked: true, limit: 50 }
   const at = await $.clock.now()
   // Taken now, so the throttles see this attempt while it is out.
   await update($, poll, p => ({ ...p, lastAt: at }))
@@ -189,8 +202,8 @@ async function refreshNow($: EngineInterface): Promise<string> {
   }
   await update($, poll, () => ({ isAvailable: true, via: got.via, lastAt: at }))
   await update($, listing, () => got.rows.slice(0, 200))
-  const n = await ingestRows($, got.rows, !f, f ? 'import' : 'poll')
-  return f ? `imported ${n} sessions (${describeFilter(f)}); ${got.rows.length} listed` : `refreshed ${got.rows.length} linked sessions`
+  const n = await ingestRows($, got.rows, !isFull, isFull && got.rows.length < FULL_LIMIT, f ? 'import' : 'poll')
+  return f ? `imported ${n} sessions (${describeFilter(f)}); ${got.rows.length} listed` : `refreshed ${got.rows.length} ${isFull ? '' : 'linked '}sessions`
 }
 
 const importPrompt = (f: CrewImport): string => {
@@ -386,7 +399,7 @@ export const register: Register = (on, options) => {
             return
           }
           const list = await read($, crew)
-          if (list.some(s => s.status === 'working') || (await read($, importing))) await refresh($)
+          if (list.some(s => s.status === 'working' || isLiveImport(s)) || (await read($, importing))) await refresh($)
         })()
       })
     }
@@ -436,7 +449,7 @@ export const register: Register = (on, options) => {
       if (parsed === 'off') {
         await update($, importing, () => null)
         await $.store.set(STORE_IMPORT, null)
-        return { text: 'Stopped importing. Imported sessions stay until /crew clear; new sessions start without an import.' }
+        return { text: 'Stopped importing new sessions; the ones already here keep refreshing until done or /crew clear. New sessions start without an import.' }
       }
       await update($, importing, () => parsed)
       await $.store.set(STORE_IMPORT, parsed)
@@ -492,13 +505,17 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: LIST }, async ($, e, next) => {
     const r = await next(e)
-    await ingestListed($, textOf(r), r.deny === undefined && !r.isError, (e as unknown as { linked?: boolean }).linked === true, true)
+    const args = e as unknown as { linked?: boolean; group?: string; limit?: number; include_archived?: boolean }
+    const rows = parseListing(textOf(r))
+    // The app's own default limit is 20.
+    const isComplete = !args.linked && !args.group && rows !== null && rows.length < (args.limit ?? 20)
+    await ingestListed($, textOf(r), r.deny === undefined && !r.isError, args.linked === true, isComplete, true)
     return r
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: GET }, async ($, e, next) => {
     const r = await next(e)
-    await ingestListed($, textOf(r), r.deny === undefined && !r.isError, true, false)
+    await ingestListed($, textOf(r), r.deny === undefined && !r.isError, true, false, false)
     return r
   }).catch(($, e, next) => next(e))
 
@@ -522,7 +539,7 @@ export const register: Register = (on, options) => {
       return { result: isGiven ? 'nothing to import: the sessions given hold no local_… ids' : 'nothing to import: call mcp__ccd_session_mgmt__list_sessions first (limit 100), then sync again' }
     await update($, importing, () => f)
     await $.store.set(STORE_IMPORT, f)
-    const n = await ingestRows($, rows, false, 'sync')
+    const n = await ingestRows($, rows, false, false, 'sync')
     const p = await read($, poll)
     const live = p.via ? `the mod refreshes them itself (via ${p.via === 'mcp' ? "the app's MCP server" : 'a tool call'})` : 'they refresh when list_sessions runs again'
     return { result: `imported ${n} of ${rows.length} sessions (${describeFilter(f)}) from ${isGiven ? 'the rows given' : 'the last list_sessions'}; ${live}` }
@@ -540,7 +557,7 @@ export const register: Register = (on, options) => {
       const text = m.content.map(b => (b.type === 'text' ? b.text : '')).join('\n')
       await apply($, parsePromptText(text), 'linked-note')
       // Imported sessions aren't in the linked note: refresh them with each prompt, when the mod can list sessions itself.
-      if (e.door === 'prompt' && (await read($, importing))) {
+      if (e.door === 'prompt' && ((await read($, importing)) || (await read($, crew)).some(isLiveImport))) {
         const p = await read($, poll)
         const at = await $.clock.now()
         if (at - p.lastAt > (p.isAvailable ? PROMPT_REFRESH_MS : RETRY_MS)) $.clock.after(0, () => void refresh($))

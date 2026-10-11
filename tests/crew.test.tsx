@@ -187,6 +187,8 @@ const host = (on: Parameters<typeof mock.clock>[0], store: Record<string, unknow
   on('ui.status', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: [] }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('tool.register', (_$, e) => ({ value: { tool: `mcp__session-crew__${e.name}` } }))
   return clock
 }
 
@@ -298,6 +300,49 @@ describe('hooks', () => {
     await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
     expect(String((await $.tool.call({ tool: 'mcp__session-crew__sync' } as never)).result)).toContain('nothing to import')
     expect(String((await $.tool.call({ tool: 'mcp__session-crew__sync', sessions: [] } as never)).result)).toContain('the sessions given hold no')
+  })
+
+  test('an imported session archived while working turns done, and back if unarchived', { options: { pollSeconds: 0 } }, async ($, on) => {
+    host(on)
+    on('mcp.call', () => {
+      throw new Error('no such server')
+    })
+    let listed = LISTING
+    on('tool.call', { tool: 'mcp__ccd_session_mgmt__list_sessions' }, () => ({ result: listed, text: listed }))
+    await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+    await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
+    await $.tool.call({ tool: 'mcp__session-crew__sync', parent: MAIN } as never)
+    const nut = async () => (await crewOf($)).find(s => s.name === 'nut-pr-review-fixes')
+    expect((await nut())?.status).toBe('working')
+
+    // A list cut at its limit says nothing about who is missing.
+    listed = JSON.stringify([{ sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', name: 'plan-anycast-dns-adguard', startedBy: MAIN }])
+    await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 1 } as never)
+    expect((await nut())?.status).toBe('working')
+    // A complete list without it: archived.
+    await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
+    expect((await nut())?.status).toBe('done')
+    // Unarchived, it is listed again and comes back.
+    listed = LISTING.replace('"isRunning":true', '"isRunning":false')
+    await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
+    expect((await nut())?.status).toBe('idle')
+  })
+
+  test('after /crew import off, imported sessions still refresh', { options: { pollSeconds: 0 } }, async ($, on) => {
+    host(on)
+    const calls: Record<string, unknown>[] = []
+    let listed = LISTING
+    on('mcp.call', (_$, e) => {
+      calls.push((e as unknown as { args: Record<string, unknown> }).args)
+      return { value: { content: [{ type: 'text', text: listed }], isError: false } }
+    })
+    await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+    await $.command.run({ command: 'crew', args: `import parent ${MAIN}` } as never)
+    await $.command.run({ command: 'crew', args: 'import off' } as never)
+    listed = LISTING.replace('"isRunning":true', '"isRunning":false')
+    await $.command.run({ command: 'crew', args: 'refresh' } as never)
+    expect(calls.at(-1)).toEqual({ limit: 100 })
+    expect((await crewOf($)).find(s => s.name === 'nut-pr-review-fixes')?.status).toBe('idle')
   })
 
   test('/crew import lists sessions itself when it can', { options: { pollSeconds: 0 } }, async ($, on) => {
