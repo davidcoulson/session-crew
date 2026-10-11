@@ -107,7 +107,15 @@ export function normalizeListed(rows: readonly unknown[]): Listed[] {
     }))
 }
 
-/** The rows of a list_sessions (or get_session) result; null when it isn't one, so a valid `[]` is told apart. */
+const isSessionRow = (v: unknown): boolean =>
+  !!v && typeof v === 'object' && !Array.isArray(v) && (typeof (v as ListedRow).sessionId === 'string' || typeof (v as ListedRow).id === 'string')
+
+/**
+ * The rows of a list_sessions result (a JSON array of session rows) or a
+ * get_session one (one session object); null for anything else, an error
+ * object or a list holding something that is no session, so neither reads as
+ * a valid empty list (which would mark every imported session archived).
+ */
 export function parseListing(text: string): Listed[] | null {
   let data: unknown
   try {
@@ -115,8 +123,8 @@ export function parseListing(text: string): Listed[] | null {
   } catch {
     return null
   }
-  if (!data || typeof data !== 'object') return null
-  return normalizeListed(Array.isArray(data) ? data : [data])
+  if (Array.isArray(data)) return data.every(isSessionRow) ? normalizeListed(data) : null
+  return isSessionRow(data) ? normalizeListed([data]) : null
 }
 
 const listedStatus = (r: Listed): CrewStatus =>

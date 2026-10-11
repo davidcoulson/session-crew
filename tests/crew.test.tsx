@@ -169,6 +169,11 @@ describe('importing', () => {
     expect(listedToPatch({ id: 'local_x', isArchived: true, status: 'working' }).status).toBe('done')
     expect(parseListing('[]')).toEqual([])
     expect(parseListing('Session not found')).toBe(null)
+    // An error object, or a list of something else, is no list of sessions.
+    expect(parseListing('{"error":"server not ready"}')).toBe(null)
+    expect(parseListing('[{"message":"busy"}]')).toBe(null)
+    expect(parseListing('[1,2]')).toBe(null)
+    expect(parseListing('{"sessionId":"local_x","isRunning":true}')?.length).toBe(1)
   })
 
   test('a proposal\'s crab follows it into its session id', () => {
@@ -319,6 +324,11 @@ describe('hooks', () => {
     listed = JSON.stringify([{ sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', name: 'plan-anycast-dns-adguard', startedBy: MAIN }])
     await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 1 } as never)
     expect((await nut())?.status).toBe('working')
+    // An error answer is no list: nothing is inferred from it.
+    listed = '{"error":"server not ready"}'
+    await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
+    expect((await nut())?.status).toBe('working')
+    listed = JSON.stringify([{ sessionId: 'local_fd7771c9-837f-4a2b-83c4-aee07912c84f', name: 'plan-anycast-dns-adguard', startedBy: MAIN }])
     // A complete list without it: archived.
     await $.tool.call({ tool: 'mcp__ccd_session_mgmt__list_sessions', limit: 100 } as never)
     expect((await nut())?.status).toBe('done')
