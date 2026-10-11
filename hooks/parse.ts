@@ -12,6 +12,8 @@ export type Patch = {
   status?: CrewStatus
   note?: string
   isImported?: boolean
+  /** When the session was last active, if the source knows: a new row's `changedAt`. */
+  since?: number
 }
 
 // --- what the app's tools answer ------------------------------------------
@@ -86,6 +88,7 @@ type ListedRow = {
   startedBy?: string
   prNumber?: number
   status?: string
+  lastActivityAt?: string
 }
 
 /** Rows as the app or the model hands them: `sessionId` or `id`, other fields kept when well-typed. */
@@ -104,6 +107,7 @@ export function normalizeListed(rows: readonly unknown[]): Listed[] {
       startedBy: typeof r.startedBy === 'string' ? r.startedBy : undefined,
       prNumber: typeof r.prNumber === 'number' ? r.prNumber : undefined,
       status: typeof r.status === 'string' ? r.status : undefined,
+      lastActivityAt: typeof r.lastActivityAt === 'string' ? r.lastActivityAt : undefined,
     }))
 }
 
@@ -145,6 +149,7 @@ export const listedToPatch = (r: Listed): Patch => ({
   status: listedStatus(r),
   note: r.prNumber ? `PR #${r.prNumber}` : undefined,
   isImported: true,
+  since: r.lastActivityAt ? Date.parse(r.lastActivityAt) : undefined,
 })
 
 export function parseListedSessions(text: string): Patch[] {
@@ -269,7 +274,8 @@ export function upsert(input: CrewSession[], p: Patch, at: number, source: strin
       title: p.title ?? '',
       status,
       startedAt: at,
-      changedAt: at,
+      // The app's last-activity time when the source has it, so an imported idle session shows how long it really has been.
+      changedAt: p.since !== undefined && Number.isFinite(p.since) && p.since <= at ? p.since : at,
       endedAt: isEnded(status) ? at : undefined,
       note: p.note,
       source,
@@ -293,6 +299,7 @@ export function upsert(input: CrewSession[], p: Patch, at: number, source: strin
     title: p.title || prev.title,
     status,
     changedAt: changed ? at : prev.changedAt,
+    changeSeenAt: changed ? at : prev.changeSeenAt,
     endedAt: isEnded(status) ? (changed ? at : prev.endedAt ?? at) : undefined,
     note: weak ? prev.note : p.note ?? (changed ? undefined : prev.note),
     source,
@@ -400,4 +407,52 @@ export function giveCostumes(list: CrewSession[], book: CostumeBook): { list: Cr
   const ids = Object.keys(byId)
   for (const id of ids.slice(0, Math.max(0, ids.length - 500))) delete byId[id]
   return { list: out, book: { byId, next } }
+}
+
+// --- the strip above the prompt ------------------------------------------------
+
+export type StripItem = { session: CrewSession; pose: 'working' | 'waiting' | 'done' | 'finished' }
+
+export const STRIP_TIMES = {
+  /** An idle session waits for you in the strip this long after it went idle. */
+  idleMs: 60 * 60_000,
+  /** A finished session celebrates this long, then shows a check mark. */
+  celebrateMs: 5_000,
+  /** And stays at least this long, then until your next prompt. */
+  holdMs: 60_000,
+}
+
+/**
+ * Who the strip shows: every working session; idle ones that went idle in the
+ * last hour (waiting on you); and ones that finished while this crew watched,
+ * until your next prompt but at least a minute. Waiting and finished need a
+ * change this crew saw (`changeSeenAt`): a row first seen already idle or done
+ * (an import, the app's note at start) shows only in the pane.
+ */
+export function stripItems(crew: readonly CrewSession[], at: number, lastPromptAt: number, t = STRIP_TIMES): StripItem[] {
+  const working: StripItem[] = []
+  const waiting: StripItem[] = []
+  const done: StripItem[] = []
+  for (const s of crew) {
+    if (s.status === 'working') working.push({ session: s, pose: 'working' })
+    else if (s.changeSeenAt === undefined) continue
+    else if (s.status === 'idle' && at - s.changedAt < t.idleMs) waiting.push({ session: s, pose: 'waiting' })
+    else if (s.status === 'done' && s.endedAt !== undefined && s.note !== 'archived') {
+      const age = at - s.endedAt
+      if (age < t.holdMs || s.endedAt > lastPromptAt) done.push({ session: s, pose: age < t.celebrateMs ? 'done' : 'finished' })
+    }
+  }
+  const newest = (a: StripItem, b: StripItem) => b.session.changedAt - a.session.changedAt
+  return [...working.sort(newest), ...waiting.sort(newest), ...done.sort(newest)]
+}
+
+/** When the strip next changes by the clock alone (a celebration ending, a hold running out), or null. */
+export function nextStripChange(items: readonly StripItem[], at: number, t = STRIP_TIMES): number | null {
+  let soonest: number | null = null
+  for (const { session: s, pose } of items) {
+    const due =
+      pose === 'done' ? (s.endedAt ?? at) + t.celebrateMs : pose === 'finished' ? (s.endedAt ?? at) + t.holdMs : pose === 'waiting' ? s.changedAt + t.idleMs : null
+    if (due !== null && due > at && (soonest === null || due < soonest)) soonest = due
+  }
+  return soonest
 }

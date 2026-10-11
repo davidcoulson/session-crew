@@ -11,6 +11,8 @@ import {
   isWithdrawn,
   listedToPatch,
   missingAsArchived,
+  nextStripChange,
+  stripItems,
   normalizeListed,
   parseFaceRules,
   parseImportArgs,
@@ -22,7 +24,7 @@ import {
   upsertAll,
 } from './parse'
 import { mergeBooks } from './parse'
-import type { CostumeBook, Listed, Patch } from './parse'
+import type { CostumeBook, Listed, Patch, StripItem } from './parse'
 
 const crew = atom({ plugin: 'session-crew', key: 'crew' } as const, [])
 const panel = atom({ plugin: 'session-crew', key: 'panel' } as const, { isCompact: false, isDoneHidden: false })
@@ -31,6 +33,9 @@ const now = atom({ plugin: 'session-crew', key: 'now' } as const, 0)
 const faces = atom({ plugin: 'session-crew', key: 'faces' } as const, {})
 const listing = atom({ plugin: 'session-crew', key: 'listing' } as const, [])
 const importing = atom({ plugin: 'session-crew', key: 'importing' } as const, null)
+const stripOn = atom({ plugin: 'session-crew', key: 'stripOn' } as const, true)
+const lastPromptAt = atom({ plugin: 'session-crew', key: 'lastPromptAt' } as const, 0)
+const bandNow = atom({ plugin: 'session-crew', key: 'bandNow' } as const, 0)
 
 const PANE = 'session-crew'
 const TITLE = 'Session crew'
@@ -45,6 +50,7 @@ const MGMT_SERVER = 'ccd_session_mgmt'
 const STORE_FACES = 'session-crew.faces'
 const STORE_IMPORT = 'session-crew.import'
 const STORE_COSTUMES = 'session-crew.costumes'
+const STORE_STRIP = 'session-crew.strip'
 // A refresh on each prompt, at most this often.
 const PROMPT_REFRESH_MS = 15_000
 // After a failed fetch, wait this long before the timer or a prompt tries again.
@@ -283,6 +289,38 @@ function stripSvg(W: number, list: CrewSession[], costumeOf: Map<string, string>
   )
 }
 
+// --- the strip above the prompt: one small crab per session, a name under it.
+
+const CELL = 58
+const STRIP_H = 46
+
+function bandSvg(W: number, items: StripItem[], costumeOf: Map<string, string>): { source: string; shown: number } {
+  const fitN = Math.max(1, Math.floor((W - 34) / CELL))
+  const shown = items.length > fitN ? items.slice(0, fitN - 1) : items
+  const more = items.length - shown.length
+  const cells = shown
+    .map(({ session: s, pose }, i) => {
+      const x = i * CELL
+      return (
+        crab(x + (CELL - 30 * 0.95) / 2, 1, costumeOf.get(s.id) ?? 'other', pose, 0.95) +
+        `<text class="${pose === 'working' ? 't' : 's'}" x="${x + CELL / 2}" y="${STRIP_H - 3}" text-anchor="middle" font-family="${FONT}" font-size="9.5"${pose === 'working' ? ' font-weight="600"' : ''}>${xml(fit(s.name, 9.5, CELL - 4))}</text>`
+      )
+    })
+    .join('')
+  const plus = more ? `<text class="s" x="${shown.length * CELL + 6}" y="${STRIP_H / 2 + 2}" font-family="${FONT}" font-size="12">+${more}</text>` : ''
+  return { source: svg(Math.max(CELL, shown.length * CELL + (more ? 34 : 0)), STRIP_H, cells + plus), shown: shown.length }
+}
+
+const POSE_WORD: Record<StripItem['pose'], string> = { working: 'working', waiting: 'waiting on you', done: 'just finished', finished: 'finished' }
+const POSE_GLYPH: Record<StripItem['pose'], string> = { working: '', waiting: '!', done: '✦', finished: '✓' }
+
+// What the band was last asked to draw, for /crew debug: the desktop Code tab's
+// band is the open question this answers. A module variable: a render hook may
+// not write state, and this is diagnostics only.
+const bandLog: { count: number; lastAt: number; surface?: string; bodyColumns?: number; maxRows?: number; below?: string; drew?: number } = { count: 0, lastAt: 0 }
+// The pane's draws beside it: a pane the desktop draws, against a band it may not.
+const paneLog: { count: number; lastAt: number; surface?: string } = { count: 0, lastAt: 0 }
+
 // Terminal frames: the clock ticks once a second while anyone works or sleeps.
 // The crab is savvy-progress's terminal glyph in its costume's color.
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -302,11 +340,14 @@ export const register: Register = (on, options) => {
   const optionRules = parseFaceRules(options.faces as readonly string[] | string | undefined)
   const pollMs = Math.max(0, Number(options.pollSeconds ?? 30)) * 1000
   const autoOpen = options.autoOpen !== false
+  const stripDefault = options.strip !== false
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const stored = (await $.store.get(STORE_FACES)) as Record<string, string> | undefined
     if (stored && typeof stored === 'object') await update($, faces, () => ({ ...stored }))
+    const strip = await $.store.get(STORE_STRIP)
+    await update($, stripOn, () => (typeof strip === 'boolean' ? strip : stripDefault))
     const imp = (await $.store.get(STORE_IMPORT)) as CrewImport | null | undefined
     if (imp && typeof imp === 'object') await update($, importing, () => imp)
 
@@ -339,6 +380,7 @@ export const register: Register = (on, options) => {
               required: ['status'],
             },
           },
+          debug: { type: 'boolean', description: 'Diagnostics only: answer with the poll and strip state as JSON.' },
         },
         required: ['sessions'],
       },
@@ -376,6 +418,19 @@ export const register: Register = (on, options) => {
           },
         },
       },
+    })
+
+    // The strip's clock: ticks only when a crab in it is due to change pose or leave.
+    $.clock.every(1000, () => {
+      void (async () => {
+        if (!(await read($, stripOn))) return
+        const at = await $.clock.now()
+        const items = stripItems(await read($, crew), await read($, bandNow), await read($, lastPromptAt))
+        const due = nextStripChange(items, await read($, bandNow))
+        // The terminal's spinners are frames of this clock; the desktop's crabs walk by CSS and need no tick.
+        const spins = bandLog.surface !== undefined && bandLog.surface !== 'desktop' && items.some(i => i.pose === 'working')
+        if (spins || (due !== null && at >= due)) await update($, bandNow, () => at)
+      })()
     })
 
     // Elapsed times and terminal frames, only while the pane is up and someone is busy or asleep.
@@ -469,6 +524,12 @@ export const register: Register = (on, options) => {
       showStatus($, await read($, crew))
       return { text: 'Cleared finished sessions from the crew.' }
     }
+    if (sub === 'strip') {
+      const want = rest[0] === 'on' ? true : rest[0] === 'off' ? false : !(await read($, stripOn))
+      await update($, stripOn, () => want)
+      await $.store.set(STORE_STRIP, want)
+      return { text: want ? 'Crab strip above the prompt: on.' : 'Crab strip above the prompt: off.' }
+    }
     if (sub === 'compact') {
       const p = await update($, panel, prev => ({ ...prev, isCompact: !prev.isCompact }))
       return { text: p.isCompact ? 'Crew panel: faces only.' : 'Crew panel: full rows.' }
@@ -476,7 +537,7 @@ export const register: Register = (on, options) => {
     if (sub === 'debug') {
       const p = await read($, poll)
       const list = await read($, crew)
-      return { text: JSON.stringify({ poll: p, importing: await read($, importing), crew: list }, null, 2) }
+      return { text: JSON.stringify({ poll: p, importing: await read($, importing), strip: { isOn: await read($, stripOn), band: bandLog, pane: paneLog }, crew: list }, null, 2) }
     }
     const isOpen = await togglePane($)
     return { text: isOpen ? 'Session crew opened.' : 'Session crew closed.' }
@@ -520,9 +581,14 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: STATUS_TOOL }, async ($, e) => {
-    const input = e as unknown as { sessions?: Patch[] }
+    const input = e as unknown as { sessions?: Patch[]; debug?: boolean }
     const patches = (input.sessions ?? []).filter(p => p && (p.id || p.name))
     const list = await apply($, patches, 'tool')
+    // `debug`: what /crew debug shows of the strip and polling, for diagnosing a session from the model's side.
+    if (input.debug === true)
+      return {
+        result: JSON.stringify({ crew: list.length, poll: await read($, poll), panes: await $.ui.panes(), strip: { isOn: await read($, stripOn), band: bandLog, pane: paneLog } }),
+      }
     return { result: `ok: ${list.length} in the crew` }
   })
 
@@ -556,6 +622,13 @@ export const register: Register = (on, options) => {
       if (e.agentId || m.role !== 'user' || !['prompt', 'delivery', 'attachment', 'hook-context'].includes(e.door)) return r
       const text = m.content.map(b => (b.type === 'text' ? b.text : '')).join('\n')
       await apply($, parsePromptText(text), 'linked-note')
+      // The person's own prompt (not another session's note): finished crabs may leave the strip after it.
+      const kind = (e.origin as { kind?: string }).kind
+      if (e.door === 'prompt' && (kind === 'composer' || kind === 'sdk' || kind === 'bridge') && !/^\s*<(cross-session-message|side-sessions-event)/.test(text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, ''))) {
+        const at = await $.clock.now()
+        await update($, lastPromptAt, () => at)
+        await update($, bandNow, () => at)
+      }
       // Imported sessions aren't in the linked note: refresh them with each prompt, when the mod can list sessions itself.
       if (e.door === 'prompt' && ((await read($, importing)) || (await read($, crew)).some(isLiveImport))) {
         const p = await read($, poll)
@@ -570,7 +643,71 @@ export const register: Register = (on, options) => {
 
   // --- drawing --------------------------------------------------------------
 
+  // The strip above the prompt. Other mods may draw there too (savvy-progress's bar): the
+  // strip goes on top of whatever the hooks beneath drew, never in its place.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    bandLog.count++
+    bandLog.lastAt = Date.now()
+    bandLog.surface = e.surface
+    bandLog.bodyColumns = e.props.bodyColumns
+    bandLog.maxRows = e.props.maxRows
+    if (e.props.hasSurvey || !(await read($, stripOn))) return next(e)
+    const all = await read($, crew)
+    const at = Math.max(await read($, bandNow), await read($, now), ...all.map(s => s.changedAt), 0)
+    const items = stripItems(all, at, await read($, lastPromptAt))
+    if (!items.length) return next(e)
+    const below = await next(e)
+    bandLog.below = JSON.stringify(below).slice(0, 160)
+    const ui = $.ui.resolve(e)
+    const { Box, Text, Button } = ui
+    const costumeOf = assignCostumes(all, await rulesNow($, optionRules))
+    const summary = items.map(i => `${i.session.name} ${POSE_WORD[i.pose]}`).join(', ')
+    const open = <Button key="session-crew-open" label={`crew ${items.length}`} plain onPress={() => void togglePane($)} />
+    const mine =
+      e.surface === 'desktop' && 'Svg' in ui
+        ? (() => {
+            const { Svg } = ui
+            const W = Math.max(160, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 90))
+            const { source } = bandSvg(W, items, costumeOf)
+            const width = Number(/width="(\d+(?:\.\d+)?)"/.exec(source)?.[1] ?? W)
+            bandLog.drew = items.length
+            return (
+              <Box key="session-crew-strip" flexDirection="row" alignItems="center" gap={1}>
+                <Svg source={source} alt={summary} width={width} height={STRIP_H} />
+                {open}
+              </Box>
+            )
+          })()
+        : (() => {
+            const room = Math.max(1, Math.floor(((e.props.bodyColumns || 80) - 10) / 14))
+            const shown = items.slice(0, room)
+            bandLog.drew = shown.length
+            return (
+              <Box key="session-crew-strip" flexDirection="row" gap={1}>
+                {shown.map(({ session: s, pose }) => (
+                  <Text key={s.id} wrap="truncate-end">
+                    <Text color={COSTUME_COLOR[costumeOf.get(s.id) ?? 'other']}>▣</Text>
+                    <Text color={pose === 'waiting' ? '#D85A30' : pose === 'working' ? undefined : '#3B9C5F'}>{pose === 'working' ? frame(s, at) : POSE_GLYPH[pose]}</Text>
+                    <Text dimColor={pose !== 'working'}>{s.name.slice(0, 10)}</Text>
+                  </Text>
+                ))}
+                {items.length > shown.length && <Text dimColor>+{items.length - shown.length}</Text>}
+                {open}
+              </Box>
+            )
+          })()
+    return (
+      <Box flexDirection="column">
+        {mine}
+        {below}
+      </Box>
+    )
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    paneLog.count++
+    paneLog.lastAt = Date.now()
+    paneLog.surface = e.surface
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const all = await read($, crew)

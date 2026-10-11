@@ -24,6 +24,20 @@ Early-access mod API; built and tested on Claude Code 2.1.295 (desktop) and 2.1.
 Buttons under the rows: **Crabs only** (a compact strip), **finished · n** (hide or show done
 sessions) and **Refresh**. The status line also carries `crew: 2 working · 1 sleeping`.
 
+### The strip above the prompt
+
+Always in view, above the prompt box: one small crab per session that needs a glance, with a short name under it.
+
+- **working**: walks, prop in motion; listed first
+- **waiting on you** (went idle in the last hour): standing still, eyes open, a red `!`
+- **just finished**: celebrates for 5 s, then a green check mark; it stays until your next prompt (at least a minute), then leaves
+- more than fit: `+N`; the **crew N** button beside it opens the pane
+
+Sessions first seen already idle or done (an import, the app's note at start) show only in the pane, so the strip
+holds what changed while you watched. It sits on top of anything else in that band (savvy-progress's bar); while
+savvy-progress shows a flow and is higher in the chain it draws alone, and the strip is back when the flow ends.
+The terminal draws the same strip in text: `▣` in the costume's color, a spinner, `!` or `✓`, and the name.
+
 ### Commands
 
 - `/crew`: show or hide the pane
@@ -31,9 +45,10 @@ sessions) and **Refresh**. The status line also carries `crew: 2 working · 1 sl
 - `/crew faces`: list the rules and who wears what
 - `/crew import [parent <local_id>] [<name-glob>] [--archived]`: bring in sessions that already exist (see below); `/crew import off` stops
 - `/crew refresh`: ask the app for the sessions now
-- `/crew compact`: toggle the crabs-only strip
+- `/crew strip on|off`: show or hide the strip above the prompt (kept across sessions); bare `/crew strip` toggles
+- `/crew compact`: toggle the crabs-only rows in the pane
 - `/crew clear`: drop finished sessions
-- `/crew debug`: dump the crew and poll state as JSON
+- `/crew debug`: dump the crew, poll and strip state as JSON (`strip.band` counts the band's draws, and names the surface asking)
 
 ## The crabs
 
@@ -113,13 +128,14 @@ everything the app already tells the session:
     "options": {
       "faces": ["nut-*=engineer", "prismarr*=chef", "*dns*=detective"],
       "pollSeconds": 30,
-      "autoOpen": true
+      "autoOpen": true,
+      "strip": true
     }
   }
 }
 ```
 
-`faces` rules are `pattern=costume`, matched against a session's name, title or id with `*` and `?`;
+`strip: false` starts sessions without the strip (`/crew strip on` still shows it). `faces` rules are `pattern=costume`, matched against a session's name, title or id with `*` and `?`;
 the first match wins, and `/crew face` rules win over these. A rule naming no costume is ignored.
 savvy-flow's tier names (`fable`, `heavy`, `careful`, `medium`, `light`, `explore`) work as costumes too.
 

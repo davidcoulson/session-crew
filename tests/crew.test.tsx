@@ -9,6 +9,8 @@ import {
   parseProposalsStarted,
   parseListing,
   selectForImport,
+  stripItems,
+  nextStripChange,
   parseFaceRules,
   parseLinkedNote,
   parseListedSessions,
@@ -183,6 +185,63 @@ describe('importing', () => {
     const started = upsertAll(proposal.list, parsePromptText(LINKED), 1, 'linked-note').slice(0, 1)
     const book = giveCostumes(started, proposal.book)!.book
     expect(book.byId['local_b2441128-a7ac-4e22-81e8-52518a2540d0']).toBe('careful')
+  })
+})
+
+describe('the strip above the prompt', () => {
+  const T = { idleMs: 3_600_000, celebrateMs: 5_000, holdMs: 60_000 }
+  const base = () => upsertAll([], [
+    { id: 'local_00000000-0000-0000-0000-000000000001', name: 'busy', status: 'working' },
+    { id: 'local_00000000-0000-0000-0000-000000000002', name: 'seen-idle', status: 'idle' },
+    { id: 'local_00000000-0000-0000-0000-000000000003', name: 'seen-done', status: 'done' },
+    { id: 'local_00000000-0000-0000-0000-000000000004', name: 'goes-idle', status: 'working' },
+    { id: 'local_00000000-0000-0000-0000-000000000005', name: 'finishes', status: 'working' },
+  ], 0, 'tool')
+
+  test('working first, then waiting, then finished; first-seen idle and done stay in the pane', () => {
+    let list = base()
+    list = upsertAll(list, [{ id: 'local_00000000-0000-0000-0000-000000000004', status: 'idle' }, { id: 'local_00000000-0000-0000-0000-000000000005', status: 'done' }], 10_000, 'tool')
+    expect(stripItems(list, 11_000, 0, T).map(i => [i.session.name, i.pose])).toEqual([
+      ['busy', 'working'],
+      ['goes-idle', 'waiting'],
+      ['finishes', 'done'],
+    ])
+    // Celebration over: a check mark; still there after a minute while no prompt came.
+    expect(stripItems(list, 16_000, 0, T).at(-1)?.pose).toBe('finished')
+    expect(stripItems(list, 600_000, 0, T).some(i => i.session.name === 'finishes')).toBe(true)
+    // A prompt after it finished: gone once the minute is up, not before.
+    expect(stripItems(list, 30_000, 20_000, T).some(i => i.session.name === 'finishes')).toBe(true)
+    expect(stripItems(list, 70_001, 20_000, T).some(i => i.session.name === 'finishes')).toBe(false)
+    // Waiting for over an hour: back to the pane only.
+    expect(stripItems(list, 10_000 + 3_600_001, 0, T).some(i => i.session.name === 'goes-idle')).toBe(false)
+  })
+
+  test('the clock only matters when a pose is due to change', () => {
+    let list = base()
+    expect(nextStripChange(stripItems(list, 1_000, 0, T), 1_000, T)).toBe(null)
+    list = upsertAll(list, [{ id: 'local_00000000-0000-0000-0000-000000000005', status: 'done' }], 10_000, 'tool')
+    expect(nextStripChange(stripItems(list, 11_000, 0, T), 11_000, T)).toBe(15_000)
+  })
+
+  test('an imported session already idle stays pane-only, however recent its activity', () => {
+    const rows = [{ id: 'local_00000000-0000-0000-0000-00000000000a', name: 'imp', isArchived: false, isRunning: false, lastActivityAt: new Date(1_000_000 - 600_000).toISOString() }]
+    const list = upsertAll([], rows.map(listedToPatch), 1_000_000, 'import', true)
+    expect(list[0]?.changedAt).toBe(400_000) // the pane still says "idle 10m"
+    expect(stripItems(list, 1_000_000, 0, T).length).toBe(0)
+  })
+
+  test('a proposal that started and went idle (or done) in one batch is in the strip', () => {
+    for (const status of ['idle', 'done'] as const) {
+      let list = upsertAll([], [parseStartResult(PROPOSED)!], 0, 's')
+      list = upsertAll(list, [...parseProposalsStarted(LINKED), { id: 'local_b2441128-a7ac-4e22-81e8-52518a2540d0', status }], 5_000, 'linked-note')
+      expect(stripItems(list, 6_000, 0, T).map(i => i.pose)).toEqual([status === 'idle' ? 'waiting' : 'done'])
+    }
+  })
+
+  test('an import inferred archived does not celebrate', () => {
+    let list = upsertAll([], [{ id: 'local_00000000-0000-0000-0000-000000000009', name: 'x', status: 'working', isImported: true }], 0, 'import')
+    list = upsertAll(list, [{ id: 'local_00000000-0000-0000-0000-000000000009', status: 'done', note: 'archived' }], 1_000, 'import')
+    expect(stripItems(list, 2_000, 0, T).length).toBe(0)
   })
 })
 
@@ -406,6 +465,46 @@ describe('hooks', () => {
       ['new', 'light'],
       ['old', 'light'],
     ])
+  })
+
+  test('the strip draws above whatever the band held, on each surface, and /crew strip turns it off', { options: { pollSeconds: 0 } }, async ($, on) => {
+    host(on)
+    // Another mod's bar beneath (savvy-progress's, say).
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', props: {}, children: ['other bar'] }) as never)
+    await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+    await $.tool.call({ tool: 'mcp__session-crew__status', sessions: [{ id: 'local_00000000-0000-0000-0000-000000000001', name: 'busy-crab', status: 'working' }] } as never)
+    const band = { plugin: 'session-crew', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { bodyRows: 9, offset: 0, total: 0 } } }
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ ...band, surface } as never)
+      expect(await ui.find({ type: 'Text', text: 'other bar' })).toBeDefined()
+      expect(await ui.find({ type: 'Button', key: 'session-crew-open' })).toBeDefined()
+      if (surface === 'desktop') expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toContain('busy-crab working')
+      else expect(await ui.find({ type: 'Text', text: /busy-crab/ })).toBeDefined()
+      await ui.unmount()
+    }
+    expect((await $.command.run({ command: 'crew', args: 'strip off' } as never)).text).toContain('off')
+    const ui = await $.ui.mount({ ...band, surface: 'desktop' } as never)
+    expect(await ui.find({ type: 'Button', key: 'session-crew-open' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'other bar' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the terminal strip\'s spinner turns with the pane closed', { options: { pollSeconds: 0 } }, async ($, on) => {
+    const clock = host(on)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+    await $.tool.call({ tool: 'mcp__session-crew__status', sessions: [{ id: 'local_00000000-0000-0000-0000-000000000001', name: 'spinner', status: 'working' }] } as never)
+    const ui = await $.ui.mount({
+      plugin: 'session-crew',
+      surface: 'terminal',
+      component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { bodyRows: 9, offset: 0, total: 0 } },
+    } as never)
+    const glyphs = async () => (await ui.findAll({ type: 'Text' })).map(t => t.text).join('|')
+    const before = await glyphs()
+    await clock.advance(1_000)
+    expect(await glyphs()).not.toBe(before)
+    await ui.unmount()
   })
 
   test('the status tool and /crew face', { options: { pollSeconds: 0 } }, async ($, on) => {

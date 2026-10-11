@@ -13,6 +13,8 @@ export type CrewSession = {
   startedAt: number
   /** When the status last changed. */
   changedAt: number
+  /** When this crew last saw the status change (not just learned it): the strip shows only such changes. */
+  changeSeenAt?: number
   /** Set while done or dismissed. */
   endedAt?: number
   /** Extra words from the app's note: `PR #199`, `started by x`. */
@@ -50,6 +52,8 @@ export type CrewListed = {
   startedBy?: string
   prNumber?: number
   status?: string
+  /** The app's ISO time of the session's last activity. */
+  lastActivityAt?: string
 }
 
 export type CrewImport = {
@@ -69,6 +73,12 @@ declare module 'claude-code' {
       listing: CrewListed[]
       /** The /crew import filter in force (mirrored in $.store), or null. */
       importing: CrewImport | null
+      /** Whether the strip above the prompt shows (the `strip` option, overridden by /crew strip, kept in $.store). */
+      stripOn: boolean
+      /** When the person last sent a prompt: finished sessions leave the strip after it. */
+      lastPromptAt: number
+      /** The strip's own clock, ticked only while a finished crab is due to change. */
+      bandNow: number
       /** Costume rules set with /crew face (pattern to costume), mirrored from $.store. */
       faces: Record<string, string>
     }

@@ -183,16 +183,27 @@ const COSTUMES: Record<string, (f: Fill, t: string, pose: Pose) => void> = {
   other: (f, _t, pose) => crabBody(f, pose),
 }
 
-const MOTION: Record<CrewStatus, string> = {
+/**
+ * A crab's pose: a session status, or one of the strip's own two: `waiting`
+ * (idle, so waiting on the person: eyes open, still, a `!`) and `finished`
+ * (done, after its celebration: still, happy, a check mark).
+ */
+export type CrabPose = CrewStatus | 'waiting' | 'finished'
+
+const MOTION: Record<CrabPose, string> = {
   working: ' run',
   idle: ' rest',
   done: ' cheer',
   proposed: '',
   dismissed: '',
+  waiting: '',
+  finished: '',
 }
 
 // What floats around the crab, in its own 30×28 grid: top left, the one corner no costume's prop takes.
-const EXTRAS: Partial<Record<CrewStatus, string>> = {
+const EXTRAS: Partial<Record<CrabPose, string>> = {
+  waiting: `<text class="q" x="0" y="9" font-family="sans-serif" font-size="10" font-weight="800" fill="#D85A30">!</text>`,
+  finished: `<path d="M0 5l2.5 2.5 5-5.5" fill="none" stroke="#3B9C5F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`,
   idle:
     `<text class="z" x="0" y="8" font-family="sans-serif" font-size="6" font-weight="700" fill="#9a9a96">z</text>` +
     `<text class="z z2" x="0" y="8" font-family="sans-serif" font-size="7" font-weight="700" fill="#9a9a96">z</text>` +
@@ -208,9 +219,9 @@ export const CRAB_SCALE = 1.1
  * inside `bd` so a prop rides the bob and adds its own motion; legs stay
  * outside it and step on their own.
  */
-export function crab(x: number, y: number, costume: string, status: CrewStatus, scale = CRAB_SCALE): string {
+export function crab(x: number, y: number, costume: string, status: CrabPose, scale = CRAB_SCALE): string {
   const pose: Pose = {
-    eyes: status === 'idle' ? 'closed' : status === 'done' ? 'happy' : 'open',
+    eyes: status === 'idle' ? 'closed' : status === 'done' || status === 'finished' ? 'happy' : 'open',
     isCheering: status === 'done',
   }
   const groups = new Map<string, string[]>([['bd', []]])

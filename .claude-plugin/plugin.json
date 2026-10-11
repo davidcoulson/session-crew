@@ -21,6 +21,12 @@
       "description": "How often to ask the desktop app for linked sessions while any is working; 0 turns polling off.",
       "default": 30
     },
+    "strip": {
+      "type": "boolean",
+      "title": "Crab strip above the prompt",
+      "description": "Shows a small crab for each working, waiting or just-finished session above the prompt. /crew strip on|off overrides it.",
+      "default": true
+    },
     "autoOpen": {
       "type": "boolean",
       "title": "Open the panel when a session starts",
