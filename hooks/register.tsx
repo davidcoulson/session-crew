@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CrewImport, CrewPanel, CrewSession, CrewStatus } from '../types'
 import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
-import { CSS, FONT, MAIN_ROW_H, PILL_COLOR, SLEEP_ROW_H, TERM_GAP, cardOf, fitTerminalRow, layoutStrip, mainRowSvg, sleepRowSvg, termCardCells, xml } from './band'
+import { CSS, FONT, MAIN_ROW_H, PILL_COLOR, SLEEP_ROW_H, TERM_GAP, cardOf, cells, clipCells, fitTerminalRow, layoutStrip, mainRowSvg, sleepRowSvg, termCardCells, xml } from './band'
 import {
   assignCostumes,
   describeFilter,
@@ -756,9 +756,9 @@ export const register: Register = (on, options) => {
     const shownCrew = await visibleCrew($, optionHide)
     const at = Math.max(await read($, bandNow), await read($, now), ...all.map(s => s.changedAt), 0)
     const items = stripItems(shownCrew, at, await read($, lastPromptAt))
-    if (!items.length) return next(e)
     // Sleeping sessions are only a count in the summary.
     const sleepingCount = paneGroups(shownCrew, at, { needsMs: STRIP_TIMES.needsMs, recentMs }).sleeping.length
+    if (!items.length && !sleepingCount) return next(e)
     const below = await next(e)
     bandLog.below = JSON.stringify(below).slice(0, 160)
     const ui = $.ui.resolve(e)
@@ -766,6 +766,21 @@ export const register: Register = (on, options) => {
     const costumeOf = assignCostumes(all, await rulesNow($, optionRules))
     const labelOf = assignLabels(all, await labelRulesNow($, labelRules), await read($, written))
     const label = (s: CrewSession) => labelOf.get(s.id) ?? s.name
+
+    // Everyone asleep: no crab, only the count, which opens the pane.
+    if (!items.length) {
+      const cols = e.props.bodyColumns || 80
+      const words = stripSummary(items, false, sleepingCount)
+      bandLog.drew = 0
+      return (
+        <Box flexDirection="column">
+          <Box key="session-crew-strip" flexDirection="row">
+            <Button key="session-crew-open" label={e.surface !== 'desktop' && cells(words) > cols ? clipCells(stripSummary(items, true, sleepingCount), cols) : words} plain onPress={() => void togglePane($)} />
+          </Box>
+          {below}
+        </Box>
+      )
+    }
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui

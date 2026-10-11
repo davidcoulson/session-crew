@@ -45,7 +45,8 @@ colour is never the only cue:
 | `● working 12m` | working, for that long |
 | `✓ done` / `✓ done · PR #226` | finished while you watched: celebrates for 5 s, then goes muted (still readable) and stays until your next prompt, at least a minute |
 
-Order: needs you, working, done. Sleeping sessions never draw a crab here; the summary counts them. With more than six, the needs-you and working cards show and the rest are
+Order: needs you, working, done. Sleeping sessions never draw a crab here; the summary counts them, and when
+everyone is asleep the strip is just that count ("13 sessions · 13 sleeping"), which opens the pane. With more than six, the needs-you and working cards show and the rest are
 `+N more`. Beside the cards, **"4 sessions · 2 working · 1 needs you · 1 done · 13 sleeping"** (just `● 2  ! 1  ✓ 1  z 13` when narrow)
 opens the pane. Hover a card for the session's full title and status.
 

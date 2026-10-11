@@ -831,6 +831,28 @@ describe('hooks', () => {
     }
   })
 
+  test('a crew all asleep keeps the strip as its count alone', { options: { pollSeconds: 0 } }, async ($, on) => {
+    host(on)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+    await $.tool.call({
+      tool: 'mcp__session-crew__status',
+      sessions: [1, 2, 3].map(n => ({ id: `local_00000000-0000-0000-0000-00000000000${n}`, name: `z${n}`, status: 'idle' })),
+    } as never)
+    for (const [surface, cols] of [['desktop', 100], ['terminal', 100], ['terminal', 6]] as const) {
+      const ui = await $.ui.mount({
+        plugin: 'session-crew',
+        surface,
+        component: 'AbovePrompt',
+        props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: cols, scroll: { bodyRows: 9, offset: 0, total: 0 } },
+      } as never)
+      const button = await ui.find({ type: 'Button', key: 'session-crew-open' })
+      expect(button?.text).toBe(cols > 20 ? '3 sessions · 3 sleeping' : 'z 3')
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+      await ui.unmount()
+    }
+  })
+
   test('the status tool and /crew face', { options: { pollSeconds: 0 } }, async ($, on) => {
     host(on)
     await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
