@@ -139,6 +139,35 @@ describe('hooks', () => {
     }
   })
 
+  test('a status change never swaps two sessions\' animals in the panel', { options: { pollSeconds: 0 } }, async ($, on) => {
+    host(on)
+    await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+    // These two ids hash to the same animal, so the second probes for another one.
+    const one = 'local_00000000-0000-0000-0000-000000000001'
+    const two = 'local_00000000-0000-0000-0000-000000000010'
+    const report = (sessions: object[]) => $.tool.call({ tool: 'mcp__session-crew__status', sessions } as never)
+    await report([{ id: one, name: 'one', status: 'working' }, { id: two, name: 'two', status: 'working' }])
+    const facesNow = async () => {
+      const ui = await $.ui.mount({
+        plugin: 'session-crew',
+        surface: 'terminal',
+        component: 'Pane',
+        requestId: 'session-crew',
+        props: { title: 'Session crew', isFocused: false, bodyColumns: 60, placement: 'dock' },
+      } as never)
+      const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+      await ui.unmount()
+      // Each row's first Text is "<face> <frame>", followed by the name.
+      const faceOf = (name: string) => texts[texts.indexOf(name) - 1]?.split(' ')[0]
+      return [faceOf('one'), faceOf('two')]
+    }
+    const before = await facesNow()
+    expect(before[0] === before[1]).toBe(false)
+    // Done sorts below working: the panel's order flips, the faces must not.
+    await report([{ id: one, status: 'done' }])
+    expect(await facesNow()).toEqual(before)
+  })
+
   test('the status tool and /crew face', { options: { pollSeconds: 0 } }, async ($, on) => {
     host(on)
     await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)

@@ -395,11 +395,14 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const list = sorted(await read($, crew))
+    const all = await read($, crew)
+    const list = sorted(all)
     const p: CrewPanel = await read($, panel)
     const pl = await read($, poll)
     const at = Math.max(await read($, now), ...list.map(s => s.changedAt), 0)
-    const faceOf = assignFaces(list, await rulesNow($, optionRules))
+    // Faces from the crew in the order it joined, never the panel's status order,
+    // so a session changing state never swaps animals with another.
+    const faceOf = assignFaces(all, await rulesNow($, optionRules))
     const finished = list.filter(s => s.status === 'done' || s.status === 'dismissed')
     const active = list.filter(s => s.status !== 'done' && s.status !== 'dismissed')
     const shown = p.isDoneHidden ? active : list

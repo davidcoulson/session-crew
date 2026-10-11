@@ -195,7 +195,9 @@ export const parseFaceRules = (lines: readonly string[] | string | undefined): [
 /**
  * One face per session: a rule set with /crew face first, then the option's
  * rules, then an animal picked by the name's hash, stepping past animals the
- * crew already shows so two sessions rarely share one.
+ * crew already shows so two sessions rarely share one. Pass the crew in the
+ * order it joined (state order): earlier sessions keep their animal when two
+ * hash to the same one, whatever their status.
  */
 export function assignFaces(crew: readonly CrewSession[], rules: [string, string][]): Map<string, string> {
   const out = new Map<string, string>()
