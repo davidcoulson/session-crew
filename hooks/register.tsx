@@ -2,10 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { CrewPanel, CrewSession, CrewStatus } from '../types'
+import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
 import {
-  assignFaces,
-  faceFor,
-  isAsciiFace,
+  assignCostumes,
   isWithdrawn,
   parseFaceRules,
   parseListedSessions,
@@ -120,8 +119,6 @@ const sorted = (list: CrewSession[]): CrewSession[] =>
 // Desktop drawing: one SVG per row, animated by CSS alone.
 
 const FONT = "-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif"
-const MONO = "ui-monospace,'SF Mono',Menlo,monospace"
-
 const xml = (s: string): string =>
   s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
 
@@ -133,87 +130,49 @@ const fit = (s: string, size: number, maxW: number): string => {
 const CSS = `<style>
 .t{fill:#1f1f1f}.s{fill:#6b6b68}.ln{stroke:#e4e4e1}
 @media (prefers-color-scheme: dark){.t{fill:#ececec}.s{fill:#a8a8a4}.ln{stroke:#333331}}
-.f{transform-box:fill-box;transform-origin:50% 85%}
-.working .f{animation:bob .5s ease-in-out infinite alternate}
-@keyframes bob{from{transform:translateY(1px) rotate(-5deg)}to{transform:translateY(-3px) rotate(5deg)}}
-.working .sp{animation:tw .8s steps(2) infinite}.working .sp2{animation-delay:-.4s}
-@keyframes tw{50%{opacity:.1}}
-.idle .f{transform:rotate(-14deg);opacity:.8;animation:br 4s ease-in-out infinite}
-@keyframes br{50%{transform:rotate(-14deg) scale(.93)}}
-.z{opacity:0;animation:zz 3s linear infinite}.z2{animation-delay:1s}.z3{animation-delay:2s}
-@keyframes zz{0%{opacity:0;transform:translate(0,0)}25%{opacity:.9}100%{opacity:0;transform:translate(9px,-15px)}}
-.done .f{animation:party 1.4s ease-in-out infinite}
-@keyframes party{0%,100%{transform:rotate(0)}25%{transform:rotate(-16deg) translateY(-2px)}75%{transform:rotate(16deg) translateY(-2px)}}
-.cf{animation:fall 1.8s linear infinite}.cf1{animation-delay:-.4s}.cf2{animation-delay:-.9s}.cf3{animation-delay:-1.3s}
-@keyframes fall{0%{transform:translateY(-4px) rotate(0);opacity:1}100%{transform:translateY(30px) rotate(300deg);opacity:0}}
-.cf{transform-box:fill-box;transform-origin:center}
-.proposed .f{opacity:.45}.q{animation:tw 1.6s steps(2) infinite}
-.dismissed .f{opacity:.3;filter:grayscale(1)}
-@media (prefers-reduced-motion: reduce){.f,.z,.cf,.sp,.q{animation:none!important}}
 </style>`
 
-// The face and what floats around it, in a 44×48 box at (x, y).
-function faceSvg(x: number, y: number, face: string, status: CrewStatus): string {
-  const shown = faceFor(face, status)
-  const ascii = isAsciiFace(face)
-  const glyph = ascii
-    ? `<text class="f t" x="22" y="31" text-anchor="middle" font-family="${MONO}" font-size="${Math.max(8, Math.min(13, 70 / [...shown].length))}">${xml(shown)}</text>`
-    : `<text class="f" x="22" y="35" text-anchor="middle" font-size="28">${xml(shown)}</text>`
-  let extra = ''
-  if (status === 'working')
-    extra = `<text class="sp" x="38" y="12" font-size="10" fill="${COLOR.working}">✦</text><text class="sp sp2" x="2" y="16" font-size="8" fill="${COLOR.working}">✦</text>`
-  if (status === 'idle')
-    extra = `<text class="z s" x="32" y="16" font-family="${FONT}" font-size="9" font-weight="700">z</text><text class="z z2 s" x="32" y="16" font-family="${FONT}" font-size="11" font-weight="700">z</text><text class="z z3 s" x="32" y="16" font-family="${FONT}" font-size="13" font-weight="700">Z</text>`
-  if (status === 'done')
-    extra =
-      `<text x="30" y="14" font-size="13">🥳</text>` +
-      ['#D85A30', '#378ADD', '#F5C542', '#7F77DD']
-        .map((c, i) => `<rect class="cf cf${i}" x="${4 + i * 10}" y="2" width="3" height="5" fill="${c}"/>`)
-        .join('')
-  if (status === 'proposed') extra = `<text class="q" x="34" y="14" font-family="${FONT}" font-size="12" font-weight="700" fill="${COLOR.proposed}">?</text>`
-  return `<g transform="translate(${x},${y})" class="${status}">${glyph}${extra}</g>`
-}
-
 const svg = (W: number, H: number, body: string): string =>
-  `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${CSS}${body}</svg>`
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${CSS}${CRAB_CSS}${body}</svg>`
 
-function rowSvg(W: number, s: CrewSession, face: string, at: number): string {
+function rowSvg(W: number, s: CrewSession, costume: string, at: number): string {
   const right = `${WORD[s.status]} · ${timeLabel(s, at)}`
   const rightW = right.length * 6.4
-  const textW = W - 54 - rightW - 12
+  const textW = W - 48 - rightW - 12
   const sub = [s.title, s.note].filter(Boolean).join(' · ')
   return svg(
     W,
     56,
-    `${faceSvg(2, 4, face, s.status)}
-<text class="t" x="54" y="23" font-family="${FONT}" font-size="13" font-weight="600">${xml(fit(s.name, 13, textW))}</text>
-<text class="s" x="54" y="40" font-family="${FONT}" font-size="11">${xml(fit(sub, 11, W - 54))}</text>
+    `${crab(2, 14, costume, s.status)}
+<text class="t" x="48" y="23" font-family="${FONT}" font-size="13" font-weight="600">${xml(fit(s.name, 13, textW))}</text>
+<text class="s" x="48" y="40" font-family="${FONT}" font-size="11">${xml(fit(sub, 11, W - 48))}</text>
 <circle cx="${W - rightW - 8}" cy="19" r="3.5" fill="${COLOR[s.status]}"/>
 <text class="s" x="${W}" y="23" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(right)}</text>
 <line class="ln" x1="0" y1="55.5" x2="${W}" y2="55.5"/>`,
   )
 }
 
-function stripSvg(W: number, list: CrewSession[], faceOf: Map<string, string>): string {
-  const fitN = Math.max(1, Math.floor(W / 46))
+function stripSvg(W: number, list: CrewSession[], costumeOf: Map<string, string>): string {
+  const fitN = Math.max(1, Math.floor((W - 30) / 38))
   const shown = list.slice(0, fitN)
   const more = list.length - shown.length
   return svg(
     W,
-    52,
-    shown.map((s, i) => faceSvg(i * 46, 2, faceOf.get(s.id) ?? '🦊', s.status)).join('') +
-      (more ? `<text class="s" x="${shown.length * 46 + 4}" y="30" font-family="${FONT}" font-size="12">+${more}</text>` : ''),
+    40,
+    shown.map((s, i) => crab(i * 38, 8, costumeOf.get(s.id) ?? 'other', s.status)).join('') +
+      (more ? `<text class="s" x="${shown.length * 38 + 4}" y="28" font-family="${FONT}" font-size="12">+${more}</text>` : ''),
   )
 }
 
 // Terminal frames: the clock ticks once a second while anyone works or sleeps.
+// The crab is savvy-progress's terminal glyph in its costume's color.
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const ZZZ = ['z  ', 'zZ ', 'zZz']
 const frame = (s: CrewSession, at: number): string => {
   const tick = Math.floor(at / 1000)
   if (s.status === 'working') return SPIN[tick % SPIN.length] ?? ''
   if (s.status === 'idle') return ZZZ[tick % ZZZ.length] ?? ''
-  if (s.status === 'done') return tick % 2 ? '🎉' : '🥳'
+  if (s.status === 'done') return tick % 2 ? '\\o/' : '|o|'
   if (s.status === 'proposed') return '?'
   return '·'
 }
@@ -232,7 +191,7 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'crew',
-      description: 'Show or hide the side-session crew. Also: /crew face <name-or-glob> <emoji>, /crew faces, /crew refresh, /crew clear, /crew compact',
+      description: 'Show or hide the side-session crew. Also: /crew face <name-or-glob> <costume>, /crew faces, /crew refresh, /crew clear, /crew compact',
       argumentHint: '[face <pattern> <face> | faces | refresh | clear | compact]',
     })
     await $.tool.register({
@@ -293,8 +252,10 @@ export const register: Register = (on, options) => {
     const [sub = '', ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
     if (sub === 'face') {
       const [pattern, ...faceParts] = rest
-      if (!pattern) return { text: 'Usage: /crew face <name-or-glob> <emoji or ASCII face>  (no face removes it)' }
-      const face = faceParts.join(' ')
+      const costumes = Object.values(WEARS).join(', ')
+      if (!pattern) return { text: `Usage: /crew face <name-or-glob> <costume>  (no costume removes the rule). Costumes: ${costumes}` }
+      const face = faceParts.join(' ').toLowerCase()
+      if (face && !costumeKey(face)) return { text: `No costume "${face}". Costumes: ${costumes}` }
       const next = await update($, faces, f => {
         const copy = { ...f }
         if (face) copy[pattern] = face
@@ -302,17 +263,17 @@ export const register: Register = (on, options) => {
         return copy
       })
       await $.store.set(STORE_FACES, next)
-      return { text: face ? `${pattern} is now ${face}.` : `${pattern} gets a random animal again.` }
+      return { text: face ? `${pattern} now wears ${WEARS[costumeKey(face) ?? 'other']}.` : `${pattern} takes the next costume in turn again.` }
     }
     if (sub === 'faces') {
       const rules = await rulesNow($, optionRules)
       const list = await read($, crew)
-      const assigned = assignFaces(list, rules)
+      const assigned = assignCostumes(list, rules)
       const lines = [
-        ...rules.map(([p, f]) => `rule  ${p} = ${f}`),
-        ...list.map(s => `crew  ${assigned.get(s.id)} ${s.name} (${s.status})`),
+        ...rules.map(([p, f]) => `rule  ${p} = ${costumeKey(f) ? WEARS[costumeKey(f) ?? 'other'] : `${f} (unknown, ignored)`}`),
+        ...list.map(s => `crew  ${s.name}: ${WEARS[assigned.get(s.id) ?? 'other']} (${s.status})`),
       ]
-      return { text: lines.length ? lines.join('\n') : 'No faces yet.' }
+      return { text: lines.length ? lines.join('\n') : 'No crew or rules yet.' }
     }
     if (sub === 'refresh') return { text: await pollSessions($) }
     if (sub === 'clear') {
@@ -401,15 +362,16 @@ export const register: Register = (on, options) => {
     const pl = await read($, poll)
     const at = Math.max(await read($, now), ...list.map(s => s.changedAt), 0)
     // Faces from the crew in the order it joined, never the panel's status order,
-    // so a session changing state never swaps animals with another.
-    const faceOf = assignFaces(all, await rulesNow($, optionRules))
+    // so a session changing state never swaps crabs with another.
+    const costumeOf = assignCostumes(all, await rulesNow($, optionRules))
+    const costume = (s: CrewSession) => costumeOf.get(s.id) ?? 'other'
     const finished = list.filter(s => s.status === 'done' || s.status === 'dismissed')
     const active = list.filter(s => s.status !== 'done' && s.status !== 'dismissed')
     const shown = p.isDoneHidden ? active : list
 
     const controls = (
       <Box key="controls" flexDirection="row" gap={2}>
-        <Button key="compact" label={p.isCompact ? 'Rows' : 'Faces only'} plain onPress={() => update($, panel, v => ({ ...v, isCompact: !v.isCompact }))} />
+        <Button key="compact" label={p.isCompact ? 'Rows' : 'Crabs only'} plain onPress={() => update($, panel, v => ({ ...v, isCompact: !v.isCompact }))} />
         {finished.length > 0 && (
           <Button
             key="done"
@@ -439,12 +401,12 @@ export const register: Register = (on, options) => {
         <Box flexDirection="column">
           {list.length === 0 && empty}
           {list.length > 0 && p.isCompact && (
-            <Svg key="strip" source={stripSvg(W, shown, faceOf)} alt={shown.map(s => `${s.name} ${WORD[s.status]}`).join(', ')} width={W} height={52} />
+            <Svg key="strip" source={stripSvg(W, shown, costumeOf)} alt={shown.map(s => `${s.name} ${WORD[s.status]}`).join(', ')} width={W} height={40} />
           )}
           {list.length > 0 &&
             !p.isCompact &&
             shown.map(s => (
-              <Svg key={s.id} source={rowSvg(W, s, faceOf.get(s.id) ?? '🦊', at)} alt={`${s.name}: ${WORD[s.status]}, ${timeLabel(s, at)}`} width={W} height={56} />
+              <Svg key={s.id} source={rowSvg(W, s, costume(s), at)} alt={`${s.name}, the ${WEARS[costume(s)]} crab: ${WORD[s.status]}, ${timeLabel(s, at)}`} width={W} height={56} />
             ))}
           {list.length > 0 && controls}
           {pollNote}
@@ -458,15 +420,18 @@ export const register: Register = (on, options) => {
         {list.length === 0 && empty}
         {p.isCompact ? (
           <Text key="strip" wrap="truncate-end">
-            {shown.map(s => `${faceOf.get(s.id)}${frame(s, at)} `).join('')}
+            {shown.map(s => (
+              <Text key={s.id} color={COSTUME_COLOR[costume(s)]}>
+                ▣{frame(s, at)}{' '}
+              </Text>
+            ))}
           </Text>
         ) : (
           shown.map(s => (
             <Box key={s.id} flexDirection="column" marginBottom={1}>
               <Box flexDirection="row" gap={1}>
-                <Text>
-                  {faceFor(faceOf.get(s.id) ?? '🦊', s.status)} {frame(s, at)}
-                </Text>
+                <Text color={COSTUME_COLOR[costume(s)]}>▣</Text>
+                <Text dimColor>{frame(s, at)}</Text>
                 <Text bold wrap="truncate-end">
                   {s.name}
                 </Text>
@@ -474,8 +439,8 @@ export const register: Register = (on, options) => {
                 <Text dimColor>{timeLabel(s, at)}</Text>
               </Box>
               <Text dimColor wrap="truncate-end">
-                {'   '}
-                {[s.title, s.note].filter(Boolean).join(' · ')}
+                {'  '}
+                {[WEARS[costume(s)], s.title, s.note].filter(Boolean).join(' · ')}
               </Text>
             </Box>
           ))

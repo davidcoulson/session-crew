@@ -17,6 +17,8 @@ export type CrewSession = {
   endedAt?: number
   /** Extra words from the app's note: `PR #199`, `started by x`. */
   note?: string
+  /** Order it joined the crew; picks its costume when no rule does. */
+  slot?: number
   /** What last told us the status (`start_session`, `linked-note`, `poll`, `tool`). */
   source: string
 }
@@ -40,7 +42,7 @@ declare module 'claude-code' {
       panel: CrewPanel
       poll: CrewPoll
       now: number
-      /** Faces set with /crew face, mirrored from $.store. */
+      /** Costume rules set with /crew face (pattern to costume), mirrored from $.store. */
       faces: Record<string, string>
     }
   }

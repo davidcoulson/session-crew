@@ -2,6 +2,7 @@
 // into the crew, and picking faces. No `$` here, so tests can call them directly.
 
 import type { CrewSession, CrewStatus } from '../types'
+import { ROTATION, costumeKey } from './crab'
 
 export type Patch = {
   id?: string
@@ -138,6 +139,7 @@ export function upsert(list: CrewSession[], p: Patch, at: number, source: string
       endedAt: isEnded(status) ? at : undefined,
       note: p.note,
       source,
+      slot: list.reduce((m, r) => Math.max(m, (r.slot ?? -1) + 1), 0),
     }
     return [...list, row].slice(-100)
   }
@@ -166,24 +168,12 @@ export function upsert(list: CrewSession[], p: Patch, at: number, source: string
 export const upsertAll = (list: CrewSession[], patches: Patch[], at: number, source: string, weak = false): CrewSession[] =>
   patches.reduce((l, p) => upsert(l, p, at, source, weak), list)
 
-// --- faces -----------------------------------------------------------------
-
-export const ANIMALS = [
-  '🦊', '🐙', '🦉', '🐢', '🦀', '🐼', '🐸', '🦔', '🐧', '🦦',
-  '🐝', '🦄', '🐨', '🦥', '🐳', '🦩', '🦝', '🐯', '🐰', '🐹',
-  '🦁', '🐻', '🐮', '🐷', '🐵', '🐲', '🦖', '🐞', '🦋', '🐬',
-] as const
-
-const hash = (s: string): number => {
-  let h = 2166136261
-  for (const ch of s) h = Math.imul(h ^ (ch.codePointAt(0) ?? 0), 16777619)
-  return h >>> 0
-}
+// --- costumes --------------------------------------------------------------
 
 const globRe = (pattern: string): RegExp =>
   new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i')
 
-/** `pattern=face` lines (the `faces` option) into ordered pairs. */
+/** `pattern=costume` lines (the `faces` option) into ordered pairs. */
 export const parseFaceRules = (lines: readonly string[] | string | undefined): [string, string][] =>
   (typeof lines === 'string' ? lines.split(/[,\n]/) : (lines ?? []))
     .map(l => {
@@ -193,43 +183,21 @@ export const parseFaceRules = (lines: readonly string[] | string | undefined): [
     .filter((r): r is [string, string] => !!r && !!r[0] && !!r[1])
 
 /**
- * One face per session: a rule set with /crew face first, then the option's
- * rules, then an animal picked by the name's hash, stepping past animals the
- * crew already shows so two sessions rarely share one. Pass the crew in the
- * order it joined (state order): earlier sessions keep their animal when two
- * hash to the same one, whatever their status.
+ * One costume per session: the first rule whose pattern matches its name,
+ * title or id (rules set with /crew face come first), else the next costume in
+ * the rotation by the order it joined the crew (its `slot`), so a session keeps
+ * its crab whatever its status and whatever else joins or leaves.
  */
-export function assignFaces(crew: readonly CrewSession[], rules: [string, string][]): Map<string, string> {
+export function assignCostumes(crew: readonly CrewSession[], rules: [string, string][]): Map<string, string> {
+  const compiled = rules
+    .map(([p, name]) => [globRe(p), costumeKey(name)] as const)
+    .filter((r): r is readonly [RegExp, string] => r[1] !== undefined)
   const out = new Map<string, string>()
-  const used = new Set<string>()
-  const compiled = rules.map(([p, f]) => [globRe(p), f] as const)
-  const free: CrewSession[] = []
-  for (const s of crew) {
+  crew.forEach((s, i) => {
     const hit = compiled.find(([re]) => re.test(s.name) || re.test(s.title) || re.test(s.id))
-    if (hit) {
-      out.set(s.id, hit[1])
-      used.add(hit[1])
-    } else free.push(s)
-  }
-  for (const s of free) {
-    const start = hash(s.taskId ?? s.id)
-    let face: string = ANIMALS[start % ANIMALS.length] ?? '🦊'
-    for (let k = 0; k < ANIMALS.length && used.has(face); k++) face = ANIMALS[(start + k + 1) % ANIMALS.length] ?? face
-    out.set(s.id, face)
-    used.add(face)
-  }
+    out.set(s.id, hit ? hit[1] : (ROTATION[(s.slot ?? i) % ROTATION.length] ?? 'other'))
+  })
   return out
-}
-
-/** An emoji or a short glyph is drawn large; anything longer is ASCII art. */
-export const isAsciiFace = (face: string): boolean => [...face].length > 2 && /[\x21-\x7e]/.test(face)
-
-/** ASCII faces close their eyes asleep and grin at the party. */
-export function faceFor(face: string, status: CrewStatus): string {
-  if (!isAsciiFace(face)) return face
-  if (status === 'idle') return face.replace(/[oO0•°·*@^ºò]/g, '-')
-  if (status === 'done') return face.replace(/[oO0•°·*@ºò-]/g, '^')
-  return face
 }
 
 // --- formatting --------------------------------------------------------------

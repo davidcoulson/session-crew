@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
+import { CRAB_CSS, crab } from '../hooks/crab'
 import {
-  assignFaces,
-  faceFor,
+  assignCostumes,
   parseFaceRules,
   parseLinkedNote,
   parseListedSessions,
@@ -71,23 +71,39 @@ describe('parsing the app', () => {
   })
 })
 
-describe('faces', () => {
-  test('rules first, then distinct animals', () => {
+describe('crabs', () => {
+  test('rules first, then costumes in turn by the order sessions joined', () => {
     const list = upsertAll([], parseLinkedNote(LINKED), 0, 'linked-note')
-    const rules = parseFaceRules(['nut-*=🔧', 'prismarr*=(o.o)'])
-    const faces = assignFaces(list, rules)
-    expect(faces.get('local_1fc7cd3c-3b35-456d-af06-23bec066b037')).toBe('🔧')
-    expect(faces.get('local_9893fb58-1861-4909-ae03-fe6e881d767f')).toBe('(o.o)')
-    const animals = [faces.get('local_b2441128-a7ac-4e22-81e8-52518a2540d0'), faces.get('local_ea1e7d9c-2af1-4559-9391-7fa28463fe1f')]
-    expect(animals[0] === animals[1]).toBe(false)
-    // The same session keeps its animal from one draw to the next.
-    expect(assignFaces(list, rules).get('local_b2441128-a7ac-4e22-81e8-52518a2540d0')).toBe(animals[0])
+    const costumes = assignCostumes(list, parseFaceRules(['nut-*=chef', 'prismarr*=pirate', '*=dragon']))
+    expect(costumes.get('local_1fc7cd3c-3b35-456d-af06-23bec066b037')).toBe('medium')
+    expect(costumes.get('local_9893fb58-1861-4909-ae03-fe6e881d767f')).toBe('explore')
+    // `dragon` is no costume: ignored, so the rest take theirs in turn (slots 1 and 2).
+    expect(costumes.get('local_b2441128-a7ac-4e22-81e8-52518a2540d0')).toBe('heavy')
+    expect(costumes.get('local_ea1e7d9c-2af1-4559-9391-7fa28463fe1f')).toBe('careful')
   })
 
-  test('ASCII faces sleep and party', () => {
-    expect(faceFor('(o.o)', 'idle')).toBe('(-.-)')
-    expect(faceFor('(o.o)', 'done')).toBe('(^.^)')
-    expect(faceFor('🦊', 'idle')).toBe('🦊')
+  test('a session keeps its costume through status changes and a /crew clear', () => {
+    let list = upsertAll([], parseLinkedNote(LINKED), 0, 'linked-note')
+    const before = assignCostumes(list, [])
+    list = upsertAll(list, [{ id: 'local_1fc7cd3c-3b35-456d-af06-23bec066b037', status: 'done' }], 1, 'tool')
+    list = list.filter(s => s.status !== 'done')
+    const after = assignCostumes(list, [])
+    for (const s of list) expect(after.get(s.id)).toBe(before.get(s.id))
+  })
+
+  test('poses: walks working, rests idle, cheers done', () => {
+    const working = crab(0, 0, 'heavy', 'working')
+    expect(working).toContain('c-heavy run')
+    const idle = crab(0, 0, 'heavy', 'idle')
+    expect(idle).toContain('c-heavy rest')
+    expect(idle).toContain('<rect x="9" y="13" width="2" height="1"') // closed eyes
+    expect(idle).toContain('class="z"')
+    const done = crab(0, 0, 'medium', 'done')
+    expect(done).toContain('c-medium cheer')
+    expect(done).toContain('class="ar"') // the waving claw
+    expect(done).toContain('class="cf cf0"')
+    expect(crab(0, 0, 'fable', 'proposed')).toContain('opacity="0.45"')
+    expect(CRAB_CSS).toContain('prefers-reduced-motion: reduce')
   })
 })
 
@@ -139,10 +155,9 @@ describe('hooks', () => {
     }
   })
 
-  test('a status change never swaps two sessions\' animals in the panel', { options: { pollSeconds: 0 } }, async ($, on) => {
+  test('a status change never swaps two sessions\' crabs in the panel', { options: { pollSeconds: 0 } }, async ($, on) => {
     host(on)
     await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
-    // These two ids hash to the same animal, so the second probes for another one.
     const one = 'local_00000000-0000-0000-0000-000000000001'
     const two = 'local_00000000-0000-0000-0000-000000000010'
     const report = (sessions: object[]) => $.tool.call({ tool: 'mcp__session-crew__status', sessions } as never)
@@ -150,16 +165,15 @@ describe('hooks', () => {
     const facesNow = async () => {
       const ui = await $.ui.mount({
         plugin: 'session-crew',
-        surface: 'terminal',
+        surface: 'desktop',
         component: 'Pane',
         requestId: 'session-crew',
         props: { title: 'Session crew', isFocused: false, bodyColumns: 60, placement: 'dock' },
       } as never)
-      const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+      const alts = (await ui.findAll({ type: 'Svg' })).map(t => String(t.props.alt))
       await ui.unmount()
-      // Each row's first Text is "<face> <frame>", followed by the name.
-      const faceOf = (name: string) => texts[texts.indexOf(name) - 1]?.split(' ')[0]
-      return [faceOf('one'), faceOf('two')]
+      const wears = (name: string) => / the (\w+) crab/.exec(alts.find(a => a.startsWith(`${name},`)) ?? '')?.[1]
+      return [wears('one'), wears('two')]
     }
     const before = await facesNow()
     expect(before[0] === before[1]).toBe(false)
@@ -176,9 +190,11 @@ describe('hooks', () => {
       sessions: [{ id: 'local_00000000-0000-0000-0000-000000000001', name: 'tiny', title: 'Trivial', status: 'working' }],
     } as never)
     expect(String(r.result)).toContain('1 in the crew')
-    const set = await $.command.run({ command: 'crew', args: 'face tiny 🐉' } as never)
-    expect(set.text).toContain('🐉')
+    const nope = await $.command.run({ command: 'crew', args: 'face tiny 🐉' } as never)
+    expect(nope.text).toContain('No costume')
+    const set = await $.command.run({ command: 'crew', args: 'face tiny chef' } as never)
+    expect(set.text).toContain('tiny now wears chef')
     const listed = await $.command.run({ command: 'crew', args: 'faces' } as never)
-    expect(listed.text).toContain('🐉 tiny (working)')
+    expect(listed.text).toContain('tiny: chef (working)')
   })
 })
