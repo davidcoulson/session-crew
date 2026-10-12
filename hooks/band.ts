@@ -2,7 +2,7 @@
 // label and a status pill under it. Pure: no \$ here, so tests and previews can
 // draw it too.
 
-import { CRAB_CSS, crab } from './crab'
+import { CRAB_CSS, crab } from './holidays'
 import type { CrabPose } from './crab'
 import { fmtAgo, paneRowText, paneSubText, pillText, stripShown } from './parse'
 import type { PaneRow, StripItem, StripPose } from './parse'

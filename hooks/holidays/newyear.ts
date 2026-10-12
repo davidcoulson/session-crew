@@ -131,63 +131,6 @@ export const NEW_YEAR: Holiday = {
       },
     },
     {
-      id: 'nye-clock',
-      name: 'Midnight clock',
-      note: 'an alarm clock held up with both hands at twelve; it rings and shakes',
-      draw: (f, pose) => {
-        crabBody(f, pose, -4, 'sh')
-        stamp(f, 21, 0, [
-          '.bb...bb.',
-          'bbbb.bbbb',
-          '..rrrrr..',
-          '.rwwkwwr.',
-          'rwwwkwwwr',
-          'rwwwkwwwr',
-          'rkwwkwwkr',
-          'rwwwwwwwr',
-          '.rwwkwwr.',
-          '..rrrrr..',
-          '.r.....r.',
-        ], { b: C.gold, r: C.red, w: C.white, k: C.black }, 'sh')
-        f(25, 1, 1, 1, C.goldD, 'sh')
-      },
-    },
-    {
-      id: 'nye-disco',
-      name: 'Disco ball',
-      note: 'a mirror ball hangs overhead, throwing coloured spots on the crab; the ball turns',
-      draw: (f, pose) => {
-        crabBody(f, pose)
-        f(15, 0, 1, 1, C.gray)
-        const ball = (rows: string[], cls?: string) =>
-          stamp(f, 11, 1, rows, { m: '#DDE0E6', M: '#8E929A', w: '#FFFFFF' }, cls)
-        ball([
-          '...MmM...',
-          '.MmMmMmM.',
-          '.mMmMmwm.',
-          'MmMmMmMmM',
-          'mMmMmMmMm',
-          'MmMmMmMmM',
-          '.mMmMmMm.',
-          '.MmMmMmM.',
-          '...mMm...',
-        ])
-        ball([
-          '...mMm...',
-          '.mMmMmMm.',
-          '.MmMmMwM.',
-          'mMmMmMmMm',
-          'MmMmMmMmM',
-          'mMmMmMmMm',
-          '.MmMmMmM.',
-          '.mMmMmMm.',
-          '...MmM...',
-        ], 'bl')
-        f(8, 17, 2, 2, '#F28CB0', 'bl'); f(19, 16, 2, 2, '#8EE0F0', 'bl'); f(24, 6, 1, 1, C.flame, 'bl')
-        f(13, 19, 2, 2, C.flame, 'bl2'); f(20, 19, 2, 2, '#F28CB0', 'bl2'); f(23, 2, 1, 1, '#F28CB0', 'bl2')
-      },
-    },
-    {
       id: 'nye-popper',
       name: 'Confetti popper',
       note: 'a striped party popper held high; the confetti bursts up',
@@ -214,30 +157,6 @@ export const NEW_YEAR: Holiday = {
           pts.forEach(([x, y, c]) => f(x, y, 2, 1, CONFETTI[c] ?? C.gold, cls))
         bits([[21, 2, 2], [25, 0, 4], [28, 1, 2]], 'rs')
         bits([[18, 3, 4], [24, 2, 2], [27, 4, 4]], 'rs2')
-      },
-    },
-    {
-      id: 'nye-tiara',
-      name: 'Glitter tiara',
-      note: 'a jewelled gold tiara and a pink feather boa; the tiara glitters',
-      draw: (f, pose) => {
-        crabBody(f, pose)
-        stamp(f, 9, 3, [
-          '.....gg.....',
-          '.g...gg...g.',
-          '.g..gppg..g.',
-          'gggggppggggg',
-          'gbggggggggbg',
-          'DDDDDDDDDDDD',
-        ], { g: C.gold, D: C.goldD, p: '#E0457B', b: '#3BA0E0' })
-        f(14, 1, 2, 1, '#FFFFFF', 'bl'); f(10, 2, 1, 1, '#FFFFFF', 'bl2'); f(19, 2, 1, 1, '#FFFFFF', 'bl')
-        stamp(f, 5, 9, [
-          '.pPpPpPpPpPpPpPpPpP.',
-          'pPpPpPpPpPpPpPpPpPpP',
-          'Pp................pP',
-          'pP................Pp',
-          '.p................p.',
-        ], { p: '#F28CB0', P: '#E0457B' })
       },
     },
     {

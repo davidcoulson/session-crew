@@ -662,7 +662,7 @@ describe('hooks', () => {
       } as never)
       const alts = (await ui.findAll({ type: 'Svg' })).map(t => String(t.props.alt))
       await ui.unmount()
-      const wears = (label: string) => / the (\w+) crab/.exec(alts.find(a => a.startsWith(`${label},`)) ?? '')?.[1]
+      const wears = (label: string) => / the (.+?) crab/.exec(alts.find(a => a.startsWith(`${label},`)) ?? '')?.[1]
       return [wears('One'), wears('Two')]
     }
     const before = await facesNow()
@@ -814,6 +814,28 @@ describe('hooks', () => {
       ['new', 'light'],
       ['old', 'light'],
     ])
+  })
+
+  test('/crew holiday dresses the crew and off undresses it; rules still win', { options: { pollSeconds: 0, holidays: 'off' } }, async ($, on) => {
+    host(on)
+    await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+    const one = 'local_00000000-0000-0000-0000-000000000001'
+    const two = 'local_00000000-0000-0000-0000-000000000002'
+    await $.tool.call({ tool: 'mcp__session-crew__status', sessions: [{ id: one, name: 'one', status: 'working' }, { id: two, name: 'two', status: 'working' }] } as never)
+    const faces = async () => (await $.command.run({ command: 'crew', args: 'faces' } as never)).text ?? ''
+    expect(await faces()).toContain('crew  one: astronaut')
+    const set = await $.command.run({ command: 'crew', args: 'holiday halloween' } as never)
+    expect(set.text).toContain('Wearing Halloween outfits now')
+    const dressed = await faces()
+    expect(dressed).not.toContain('astronaut')
+    expect(dressed).not.toContain('detective')
+    // A rule still wins, and can name a holiday outfit.
+    await $.command.run({ command: 'crew', args: 'face two santa' } as never)
+    expect(await faces()).toContain('crew  two: santa')
+    await $.command.run({ command: 'crew', args: 'holiday off' } as never)
+    expect(await faces()).toContain('crew  one: astronaut')
+    expect((await $.command.run({ command: 'crew', args: 'holiday easter-ish' } as never)).text).toContain('No holiday "easter-ish"')
+    expect((await $.command.run({ command: 'crew', args: 'holiday list' } as never)).text).toContain('halloween (Halloween, Oct 15–31): witch')
   })
 
   test('the strip draws above whatever the band held, on each surface, and /crew strip turns it off', { options: { pollSeconds: 0 } }, async ($, on) => {

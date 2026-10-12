@@ -12,7 +12,20 @@
       "type": "string",
       "multiple": true,
       "title": "Faces",
-      "description": "pattern=costume pairs, matched against a session's name, title or id (* and ? globs, first match wins), e.g. nut-*=engineer. Costumes: astronaut, detective, engineer, chef, racer, pirate, plain. Unmatched sessions take the next costume in turn.",
+      "description": "pattern=costume pairs, matched against a session's name, title or id (* and ? globs, first match wins), e.g. nut-*=engineer. Costumes: astronaut, detective, engineer, chef, racer, pirate, plain, or a holiday outfit's id (witch, santa, …). Unmatched sessions take the next costume in turn.",
+      "default": []
+    },
+    "holidays": {
+      "type": "string",
+      "title": "Holiday outfits",
+      "description": "auto dresses the crabs for holidays in their date windows (Halloween Oct 15–31, Christmas Dec 1–26, and more; /crew holiday list); off never does; a holiday's id (halloween, christmas, …) forces it whatever the date. /crew holiday overrides it.",
+      "default": "auto"
+    },
+    "skipHolidays": {
+      "type": "string",
+      "multiple": true,
+      "title": "Skip holidays",
+      "description": "Holiday ids to leave out under auto, e.g. thanksgiving. Ids: lunarnewyear, valentine, stpatrick, easter, july4, muertos, halloween, diwali, thanksgiving, hanukkah, christmas, newyear.",
       "default": []
     },
     "pollSeconds": {

@@ -126,99 +126,6 @@ export const EASTER: Holiday = {
       },
     },
     {
-      id: 'bonnet',
-      name: 'Easter bonnet',
-      note: 'a wide straw bonnet with a pink ribbon and spring flowers; the ribbon tails flutter',
-      draw: (f, pose) => {
-        crabBody(f, pose)
-        stamp(f, 21, 9, ['pp.', '.pp', 'pp.', 'p..'], { p: PINK_D }, 'swt')
-        stamp(f, 4, 3, [
-          '.......SSSSSSSS.......',
-          '......ssTsssTsss......',
-          '.....sssssssssss......',
-          '.....sTsssTsssTss.....',
-          '.....ppppppppppppp....',
-          '.SssssTsssssTssssssS..',
-          'SSSSSSSSSSSSSSSSSSSSS.',
-        ].map(r => r.padEnd(22, '.')), { s: '#E3BC6A', S: '#B98E3E', T: '#CFA552', p: PINK_D })
-        stamp(f, 9, 3, ['.k.', 'kyk', '.k.'], { k: PINK, y: C.gold })
-        stamp(f, 13, 2, ['.l.', 'lyl', '.l.'], { l: LILAC, y: C.gold })
-        stamp(f, 17, 3, ['.w.', 'wyw', '.w.'], { w: C.white, y: C.gold })
-        f(12, 4, 1, 1, '#4FB06A'); f(16, 4, 1, 1, '#4FB06A')
-      },
-    },
-    {
-      id: 'carrot',
-      name: 'Carrot muncher',
-      note: 'a big bitten carrot and buck teeth; the carrot tops sway',
-      draw: (f, pose) => {
-        stamp(f, 24, 4, [
-          'oooOo',
-          'oOooi',
-          'oooi.',
-          'Oooi.',
-          'oOooi',
-          '.ooOo',
-          '.oOo.',
-          '.ooo.',
-          '..oO.',
-          '..oo.',
-          '..o..',
-          '..o..',
-        ], { o: '#F58A1F', O: '#C2600F', i: '#FFD39A' })
-        crabBody(f, pose)
-        stamp(f, 24, 0, ['l.l.l', '.lLl.', 'lLlL.', '.lll.'], { l: '#4FB06A', L: '#2E8B4A' }, 'sw')
-        f(13, 15, 4, 1, INK); f(14, 16, 2, 2, '#FFFFFF'); f(14, 17, 2, 1, C.shade)
-      },
-    },
-    {
-      id: 'lamb',
-      name: 'Lamb',
-      note: 'a fluffy wool hood and fleece with floppy ears and a bell; the bell swings',
-      draw: (f, pose) => {
-        crabBody(f, pose)
-        legs(f, '#5E565A', 23, 3)
-        const puffs: [number, number, number][] = [
-          [8.5, 8.5, 2.6], [11.5, 7.2, 2.6], [15, 6.8, 2.6], [18.5, 7.2, 2.6], [21.5, 8.5, 2.6],
-          [7.6, 11.5, 2.2], [22.4, 11.5, 2.2], [7.6, 14.5, 2.2], [22.4, 14.5, 2.2],
-          [8.5, 20, 2.4], [11.8, 20.6, 2.4], [15, 20.8, 2.4], [18.2, 20.6, 2.4], [21.5, 20, 2.4],
-        ]
-        const wool = (x: number, y: number) =>
-          (x >= 7 && x <= 22 && y >= 17 && y <= 21) ||
-          (!(x >= 9 && x <= 20 && y >= 10 && y <= 16) && puffs.some(([cx, cy, r]) => Math.hypot(x + 0.5 - cx, y + 0.5 - cy) <= r))
-        for (let y = 3; y < 24; y++) for (let x = 4; x < 26; x++) {
-          if (!wool(x, y)) continue
-          const edge = !wool(x - 1, y) || !wool(x + 1, y) || !wool(x, y - 1) || !wool(x, y + 1)
-          f(x, y, 1, 1, edge ? '#BDB9AE' : C.white)
-        }
-        stamp(f, 3, 9, ['eee.', '.eee'], { e: '#9A8E93' })
-        stamp(f, 23, 9, ['.eee', 'eee.'], { e: '#9A8E93' })
-        f(9, 16, 12, 1, C.blue)
-        f(14, 15, 2, 1, PINK_D)
-        stamp(f, 13, 17, ['.gg.', 'gGgg', 'gggg', '.k..'], { g: C.gold, G: '#FFF3B8', k: C.goldD }, 'swt')
-      },
-    },
-    {
-      id: 'egghunt',
-      name: 'Egg hunter',
-      note: 'a safari hat and a magnifier over a hidden egg; the magnifier searches',
-      draw: (f, pose) => {
-        crabBody(f, pose, -4, 'sh')
-        stamp(f, 25, 21, ['.pp.', 'pppp', 'yYyY', 'pppp', '.pp.'], { p: PINK, y: YELLOW, Y: '#E0B93A' })
-        stamp(f, 6, 4, [
-          '.....kkkkkkkk.....',
-          '....hhhhhhhhhh....',
-          '....hhhhhhhhhh....',
-          '....bbbbbbbbbb....',
-          'hhhhhhhhhhhhhhhhhh',
-          '.kkkkkkkkkkkkkkkk.',
-        ], { h: '#CDB57E', k: '#9C8350', b: '#6B4A2E' })
-        f(26, 14, 1, 2, '#6B4A2E', 'sh')
-        stamp(f, 24, 16, ['.kkk.', 'kgggk', 'kgggk', 'kgggk', '.kkk.'], { k: C.goldD, g: 'rgba(169,214,245,.55)' }, 'sh')
-        f(25, 17, 1, 1, '#FFFFFF', 'sh')
-      },
-    },
-    {
       id: 'chocbunny',
       name: 'Chocolate bunny',
       note: 'a chocolate bunny with a bitten ear, icing eyes and gold foil; the foil glints',
@@ -238,23 +145,6 @@ export const EASTER: Holiday = {
         ], { y: C.gold, Y: C.goldD })
         stamp(f, 12, 16, ['rr..rr', 'rrRRrr', 'rr..rr'], { r: C.red, R: C.redD })
         f(9, 19, 1, 1, '#FFF8D8', 'bl'); f(19, 20, 1, 1, '#FFF8D8', 'bl2'); f(14, 21, 1, 1, '#FFF8D8', 'bl')
-      },
-    },
-    {
-      id: 'tulips',
-      name: 'Tulip crown',
-      note: 'a headband of red, yellow and pink tulips; the tulips sway',
-      draw: (f, pose) => {
-        crabBody(f, pose)
-        f(7, 9, 16, 1, '#2E8B4A')
-        const tulip = (x: number, y: number, c: string, d: string, cls: string) => {
-          stamp(f, x, y, ['c.c.c', 'cdcdc', 'ccccc', '.ccc.'], { c, d }, cls)
-          f(x + 2, y + 4, 1, 9 - y - 4, '#2E8B4A', cls)
-        }
-        tulip(7, 3, C.red, '#F26D6A', 'sw a')
-        tulip(13, 1, YELLOW, C.gold, 'sw b')
-        tulip(19, 3, '#E77FA6', PINK, 'sw c')
-        f(8, 7, 1, 1, '#4FB06A', 'sw a'); f(16, 6, 1, 1, '#4FB06A', 'sw b'); f(22, 7, 1, 1, '#4FB06A', 'sw c')
       },
     },
   ],

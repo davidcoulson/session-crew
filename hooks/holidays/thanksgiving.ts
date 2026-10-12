@@ -181,50 +181,5 @@ export const THANKSGIVING: Holiday = {
         stamp(f, 21, 4, ['...BBB...', '.bwbwbwb.', 'bbwwwwwbb', '.bbbbbbb.', '...bbb...'], { b: '#8B4A22', B: '#B56E38', w: C.white }, 'sp')
       },
     },
-    {
-      id: 'tg-scarecrow',
-      name: 'Scarecrow',
-      note: 'a ragged straw hat, a plaid patch and straw at the claws; the crow on the brim flaps',
-      draw: (f, pose) => {
-        crabBody(f, pose)
-        const straw = '#E8C860'
-        stamp(f, 5, 3, [
-          '......tttttttt......',
-          '.....tTttTttTtt.....',
-          '.....tttTttTttt.....',
-          '.....rrrrrrrrrr.....',
-          '..tttttttttttttttt..',
-          't.tTttttTttttTtttt.t',
-          '.y.y............y.y.',
-        ], { t: '#D4A85A', T: '#B88A3E', r: C.red, y: straw })
-        stamp(f, 16, 15, ['k.k.k.', '.bRbR.', 'kRRRRk', '.bRbR.', 'kRRRRk', '.k.k.k'], { b: C.blue, R: C.redD, k: '#4A3426' })
-        const y = pose.isCheering ? 11 : 15
-        const cls = pose.isCheering ? 'ar' : undefined
-        stamp(f, 27, y, ['yy', '.y', 'yy'], { y: straw }, cls)
-        stamp(f, 1, y, ['yy', 'y.', 'yy'], { y: straw }, cls)
-        stamp(f, 21, 1, ['..kl.', '.kkko', 'lkkk.', 'kkkk.', '.k.k.'], { k: '#2E2A35', l: '#6E6684', o: C.orange }, 'fp')
-      },
-    },
-    {
-      id: 'tg-cider',
-      name: 'Apple cider',
-      note: 'a knit scarf and a mug of cider with a cinnamon stick; steam curls up',
-      draw: (f, pose) => {
-        crabBody(f, pose, -4)
-        const knit = { g: '#2E6B4A', m: '#E2B33A' }
-        stamp(f, 7, 16, ['gggmgggmgggmgggm', 'gggmgggmgggmgggm'], knit)
-        stamp(f, 9, 18, ['gm', 'gm', 'gm', 'm.'], knit, 'sw')
-        stamp(f, 22, 2, [
-          '...n....',
-          '...n....',
-          'gaaanag.',
-          'wwwwwwgg',
-          'wrrrrw.g',
-          'wwwwwwgg',
-          'gwwwwg..',
-        ], { w: C.white, g: C.shade, a: '#C77B30', n: '#7A4A26', r: C.red })
-        f(23, 0, 1, 2, STEAM, 'rs'); f(26, 0, 1, 2, STEAM, 'rs2')
-      },
-    },
   ],
 }

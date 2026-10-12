@@ -97,6 +97,7 @@ The terminal draws the same cards in text: `▣ Label` and a coloured `● worki
 - `/crew strip on|off`: show or hide the strip above the prompt (kept across sessions); bare `/crew strip` toggles
 - `/crew label <name-or-glob> <label>`: the strip's label for matching sessions (kept across sessions); without a label it removes the rule
 - `/crew labels`: list the label rules and every session's label
+- `/crew holiday [auto|off|<id>|option|list]`: dress for the calendar (`auto`), never (`off`), or one holiday whatever the date; `option` goes back to the `holidays` option, `list` shows the holidays and their outfit ids. Kept across sessions
 - `/crew compact`: toggle the crabs-only rows in the pane
 - `/crew clear`: drop finished sessions
 - `/crew debug`: dump the crew, poll and strip state as JSON (`strip.band` counts the band's draws, and names the surface asking)
@@ -124,12 +125,33 @@ Sessions without a rule take the first six in turn. By status:
 `prefers-reduced-motion` stops every animation and keeps the poses. The terminal draws
 savvy-progress's `▣` in the costume's color, with a spinner, `zZz` or `\o/` beside it.
 
-### Holiday outfits (preview only)
+### Holiday outfits
 
-`hooks/holidays.ts` and `hooks/holidays/*.ts` draw seasonal outfits (Halloween, Christmas, Hanukkah and more) with the
-same frame, body and motion as the costumes above. They aren't switched on yet. To see them all, build the gallery with
-`bun scripts/build-preview.ts` and open `preview/holidays.html`: every outfit working, needing you and idle, at the
-strip's real size and three times larger, on the app's light and dark grounds, with the proposal for when they'd switch on.
+In a holiday's window, sessions without a `faces` rule trade their costume for one of its outfits (102 across 12
+holidays, `/crew holiday list`):
+
+| holiday | window | outfits |
+| --- | --- | --- |
+| Lunar New Year | the eve and first week | 10 |
+| Valentine's Day | Feb 10–14 | 10 |
+| St Patrick's Day | Mar 14–17 | 4 |
+| Easter | the Sunday before through Easter Monday | 5 |
+| 4th of July | Jul 1–5 | 7 |
+| Día de los Muertos | Oct 28 – Nov 2 | 10 |
+| Halloween | Oct 15–31 | 12 |
+| Diwali | two days either side of the main day | 10 |
+| Thanksgiving | three days either side of the fourth Thursday in November | 8 |
+| Hanukkah | the eight nights | 9 |
+| Christmas | Dec 1–26 | 10 |
+| New Year's Eve | Dec 29 – Jan 2 | 7 |
+
+Each session's outfit comes from a hash of its id and the year, so it's the same in every panel and after a restart,
+and sessions take theirs in the order they joined, a clash moving to the next free one, so no two crabs match until
+the outfits run out. Overlapping holidays (Hanukkah in December) share their outfits. Rules still win, and can name a
+holiday outfit by id (`nut-*=witch`). Lunar New Year, Hanukkah and Diwali come from date tables that run to 2035.
+
+To see them all, build the gallery with `bun scripts/build-preview.ts` and open `preview/holidays.html`: every outfit
+working, needing you and idle, at the strip's real size and three times larger, on the app's light and dark grounds.
 
 ## Importing sessions that already exist
 
@@ -185,6 +207,8 @@ everything the app already tells the session:
   "session-crew": {
     "options": {
       "faces": ["nut-*=engineer", "prismarr*=chef", "*dns*=detective"],
+      "holidays": "auto",
+      "skipHolidays": ["thanksgiving"],
       "labels": ["todo-mod=To-do mod", "add-nic-*=NIC sensors"],
       "aiLabels": true,
       "stripScale": 1.5,
@@ -202,7 +226,9 @@ everything the app already tells the session:
 long a finished session stays in the main list. `labels` rules are `pattern=label`, matched like `faces`, and win over the model's labels; `stripScale` sizes the
 strip's crabs (0.8 to 2.5). `strip: false` starts sessions without the strip (`/crew strip on` still shows it). `faces` rules are `pattern=costume`, matched against a session's name, title or id with `*` and `?`;
 the first match wins, and `/crew face` rules win over these. A rule naming no costume is ignored.
-savvy-flow's tier names (`fable`, `heavy`, `careful`, `medium`, `light`, `explore`) work as costumes too.
+savvy-flow's tier names (`fable`, `heavy`, `careful`, `medium`, `light`, `explore`) work as costumes too, and so do
+holiday outfit ids. `holidays` is `auto` (dress for the calendar), `off`, or a holiday's id to force it;
+`skipHolidays` leaves holidays out under `auto`. `/crew holiday` overrides `holidays`.
 
 ## Running it
 
@@ -243,7 +269,8 @@ use). If the terminal's `claude` is older, run the desktop app's own CLI:
 `"$HOME/Library/Application Support/Claude/claude-code/2.1.295/<build>/claude.app/Contents/MacOS/claude" plugin test ~/dev/session-crew`.
 
 `hooks/parse.ts` holds the parsing, merging and costume logic as pure functions; `hooks/crab.ts`
-the crab art; `hooks/register.tsx` the hooks and drawing; `types/index.d.ts` the `$.state` contract.
+the crab art; `hooks/holidays.ts` and `hooks/holidays/` the holiday outfits and when they're worn;
+`hooks/register.tsx` the hooks and drawing; `types/index.d.ts` the `$.state` contract.
 
 ## License
 

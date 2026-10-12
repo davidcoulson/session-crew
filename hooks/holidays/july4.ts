@@ -129,24 +129,6 @@ export const JULY_4: Holiday = {
       },
     },
     {
-      id: 'bbqchef',
-      name: 'BBQ chef',
-      note: 'a gingham apron and a hot dog on the spatula; the hot dog steams',
-      draw: (f, pose) => {
-        crabBody(f, pose, -4)
-        f(11, 10, 1, 5, RED); f(18, 10, 1, 5, RED)
-        for (let y = 15; y < 22; y++) for (let x = 10; x < 20; x++) {
-          const a = (x >> 1) % 2, b = ((y - 15) >> 1) % 2
-          f(x, y, 1, 1, a && b ? RED : a || b ? '#E88A86' : WHITE)
-        }
-        f(10, 15, 10, 1, RED)
-        f(26, 5, 1, 5, '#6B4A2E')
-        f(24, 4, 5, 1, '#9AA0A8')
-        stamp(f, 23, 1, ['.bbbbb.', 'rryryrr', '.bbbbb.'], { r: '#C8442C', y: C.gold, b: '#E9B062' })
-        f(25, 0, 1, 1, '#E6E6E6', 'rs'); f(27, 0, 1, 1, '#E6E6E6', 'rs2')
-      },
-    },
-    {
       id: 'starshades',
       name: 'Star shades',
       note: 'red and blue star-shaped sunglasses; the lenses glint',
@@ -183,58 +165,6 @@ export const JULY_4: Holiday = {
         eyes(f, pose)
         if (pose.eyes === 'open') { f(8, 11, 3, 1, INK); f(19, 11, 3, 1, INK) }
         stamp(f, 13, 13, ['yyyy', 'yyyy', '.yyY', '..Y.'], { y: C.gold, Y: C.goldD })
-      },
-    },
-    {
-      id: 'watermelon',
-      name: 'Watermelon',
-      note: 'a gingham bib and a big slice of watermelon; the slice bobs to its mouth',
-      draw: (f, pose) => {
-        crabBody(f, pose, -4, 'up')
-        stamp(f, 22, 2, [
-          '..rrrrrr',
-          '.rrkrrkr',
-          'wrrrrrrw',
-          'gwrkrrwg',
-          '.gwrrwg.',
-          '..gwwg..',
-          '...gg...',
-        ], { g: '#2E8B4A', w: '#E8F2D8', r: '#F0505A', k: INK }, 'up')
-        for (const [y, w] of [[16, 10], [17, 8], [18, 6], [19, 4]] as const) {
-          const x0 = 15 - w / 2
-          for (let x = x0; x < x0 + w; x++) f(x, y, 1, 1, (x + y) % 2 ? RED : WHITE)
-        }
-        f(13, 15, 4, 1, INK)
-      },
-    },
-    {
-      id: 'drummer',
-      name: 'Drummer',
-      note: 'a plumed band shako and a snare drum; the sticks drum',
-      draw: (f, pose) => {
-        crabBody(f, pose)
-        stamp(f, 10, 0, [
-          '....ww....',
-          '....rr....',
-          'llllllllll',
-          'bbbbyybbbb',
-          'bbbyyyybbb',
-          'bbbbyybbbb',
-          'bbbbbbbbbb',
-          'yyyyyyyyyy',
-          'bbbbbbbbbb',
-          'kkkkkkkkkkkk',
-        ], { w: WHITE, r: RED, l: NAVY_L, b: NAVY, y: C.gold, k: '#4A4656' })
-        stamp(f, 9, 16, [
-          'RRRRRRRRRRRR',
-          'bwwwbwwwbwww',
-          'wbwbwbwbwbwb',
-          'wwbwwwbwwwbw',
-          'RRRRRRRRRRRR',
-        ], { R: RED, w: WHITE, b: BLUE })
-        f(9, 17, 1, 3, EDGE); f(20, 17, 1, 3, EDGE)
-        stamp(f, 5, 14, ['sss....', '...sssS'], { s: '#6B4423', S: WHITE }, 'up')
-        stamp(f, 18, 14, ['....sss', 'Ssss...'], { s: '#6B4423', S: WHITE }, 'up2')
       },
     },
   ],

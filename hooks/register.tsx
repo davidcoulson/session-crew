@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { CrewImport, CrewPanel, CrewSession, CrewStatus } from '../types'
-import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
+import { WEARS } from './crab'
+import { CRAB_CSS, HOLIDAYS, costumeColor, crab, dressKey, seasonAt, wears } from './holidays'
 import { CSS, FONT, MAIN_ROW_H, PILL_COLOR, SLEEP_ROW_H, TERM_GAP, cardCrabSvg, cardOf, cardPillSvg, clipCells, fitTerminalRow, layoutStrip, mainRowSvg, sleepRowSvg, termCardCells } from './band'
 import {
   assignCostumes,
@@ -58,6 +59,7 @@ const bandNow = atom({ plugin: 'session-crew', key: 'bandNow' } as const, 0)
 const labels = atom({ plugin: 'session-crew', key: 'labels' } as const, {})
 const hidden = atom({ plugin: 'session-crew', key: 'hidden' } as const, [])
 const written = atom({ plugin: 'session-crew', key: 'written' } as const, {})
+const holidayMode = atom({ plugin: 'session-crew', key: 'holidayMode' } as const, null)
 const focusMiss = atom({ plugin: 'session-crew', key: 'focusMiss' } as const, null)
 
 const PANE = 'session-crew'
@@ -76,6 +78,7 @@ const STORE_FACES = 'session-crew.faces'
 const STORE_IMPORT = 'session-crew.import'
 const STORE_COSTUMES = 'session-crew.costumes'
 const STORE_STRIP = 'session-crew.strip'
+const STORE_HOLIDAY = 'session-crew.holiday'
 const STORE_LABELS = 'session-crew.labels'
 const STORE_HIDDEN = 'session-crew.hidden'
 const STORE_SLEEPING = 'session-crew.sleeping'
@@ -346,6 +349,14 @@ async function rulesNow($: EngineInterface, optionRules: [string, string][]): Pr
   return [...Object.entries(await read($, faces)), ...optionRules]
 }
 
+// /crew holiday's choice wins over the `holidays` option.
+async function seasonNow($: EngineInterface, at: number, holidays: { mode: string; skip: string[] }) {
+  return seasonAt(at, (await read($, holidayMode)) ?? holidays.mode, holidays.skip)
+}
+
+const listOption = (v: unknown): string[] =>
+  (Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[,\n]/) : []).map(p => String(p).trim().toLowerCase()).filter(Boolean)
+
 // The crew less what hide rules (the hidePatterns option and /crew hide) leave out of the pane and the strip.
 async function visibleCrew($: EngineInterface, optionHide: readonly string[]): Promise<CrewSession[]> {
   const patterns = [...optionHide, ...(await read($, hidden))]
@@ -509,6 +520,7 @@ export const register: Register = (on, options) => {
     .map(p => String(p).trim())
     .filter(Boolean)
   const recentMs = Math.max(1, Number(options.recentMinutes ?? 30) || 30) * 60_000
+  const holidays = { mode: String(options.holidays ?? 'auto').trim().toLowerCase() || 'auto', skip: listOption(options.skipHolidays) }
   const paneTimes = { ...PANE_TIMES, recentMs }
 
 
@@ -530,13 +542,15 @@ export const register: Register = (on, options) => {
     }
     const strip = await $.store.get(STORE_STRIP)
     await update($, stripOn, () => (typeof strip === 'boolean' ? strip : stripDefault))
+    const holiday = await $.store.get(STORE_HOLIDAY)
+    if (typeof holiday === 'string') await update($, holidayMode, () => holiday)
     const imp = (await $.store.get(STORE_IMPORT)) as CrewImport | null | undefined
     if (imp && typeof imp === 'object') await update($, importing, () => imp)
 
     await $.command.register({
       name: 'crew',
       description:
-        'Show or hide the side-session crew. Also: /crew import [parent <id>] [<glob>] [--archived] | off, /crew face <name-or-glob> <costume>, /crew faces, /crew refresh, /crew clear, /crew compact',
+        'Show or hide the side-session crew. Also: /crew import [parent <id>] [<glob>] [--archived] | off, /crew face <name-or-glob> <costume>, /crew faces, /crew holiday <auto|off|id|list>, /crew refresh, /crew clear, /crew compact',
       argumentHint: '[import … | face <pattern> <costume> | faces | refresh | clear | compact]',
     })
     await $.tool.register({
@@ -662,10 +676,10 @@ export const register: Register = (on, options) => {
     const [sub = '', ...rest] = e.args.trim().split(/\s+/).filter(Boolean)
     if (sub === 'face') {
       const [pattern, ...faceParts] = rest
-      const costumes = Object.values(WEARS).join(', ')
+      const costumes = `${Object.values(WEARS).join(', ')}, or a holiday outfit's id (/crew holiday list)`
       if (!pattern) return { text: `Usage: /crew face <name-or-glob> <costume>  (no costume removes the rule). Costumes: ${costumes}` }
       const face = faceParts.join(' ').toLowerCase()
-      if (face && !costumeKey(face)) return { text: `No costume "${face}". Costumes: ${costumes}` }
+      if (face && !dressKey(face)) return { text: `No costume "${face}". Costumes: ${costumes}` }
       const next = await update($, faces, f => {
         const copy = { ...f }
         if (face) copy[pattern] = face
@@ -673,15 +687,15 @@ export const register: Register = (on, options) => {
         return copy
       })
       await $.store.set(STORE_FACES, next)
-      return { text: face ? `${pattern} now wears ${WEARS[costumeKey(face) ?? 'other']}.` : `${pattern} takes the next costume in turn again.` }
+      return { text: face ? `${pattern} now wears ${wears(dressKey(face) ?? 'other')}.` : `${pattern} takes the next costume in turn again.` }
     }
     if (sub === 'faces') {
       const rules = await rulesNow($, optionRules)
       const list = await read($, crew)
-      const assigned = assignCostumes(list, rules)
+      const assigned = assignCostumes(list, rules, await seasonNow($, await $.clock.now(), holidays))
       const lines = [
-        ...rules.map(([p, f]) => `rule  ${p} = ${costumeKey(f) ? WEARS[costumeKey(f) ?? 'other'] : `${f} (unknown, ignored)`}`),
-        ...list.map(s => `crew  ${s.name}: ${WEARS[assigned.get(s.id) ?? 'other']} (${s.status})`),
+        ...rules.map(([p, f]) => `rule  ${p} = ${dressKey(f) ? wears(dressKey(f) ?? 'other') : `${f} (unknown, ignored)`}`),
+        ...list.map(s => `crew  ${s.name}: ${wears(assigned.get(s.id) ?? 'other')} (${s.status})`),
       ]
       return { text: lines.length ? lines.join('\n') : 'No crew or rules yet.' }
     }
@@ -757,6 +771,28 @@ export const register: Register = (on, options) => {
       await update($, stripOn, () => want)
       await $.store.set(STORE_STRIP, want)
       return { text: want ? 'Crab strip above the prompt: on.' : 'Crab strip above the prompt: off.' }
+    }
+    if (sub === 'holiday') {
+      const arg = (rest[0] ?? '').toLowerCase()
+      const ids = HOLIDAYS.map(h => h.id).join(', ')
+      if (arg === 'list')
+        return { text: HOLIDAYS.map(h => `${h.id} (${h.name}, ${h.when}): ${h.outfits.map(o => o.id).join(', ')}`).join('\n') }
+      if (arg && arg !== 'auto' && arg !== 'off' && arg !== 'option' && !HOLIDAYS.some(h => h.id === arg))
+        return { text: `No holiday "${arg}". Usage: /crew holiday <auto|off|option|list|${ids}>` }
+      if (arg) {
+        // `option` drops the override and follows the `holidays` option again.
+        const mode = arg === 'option' ? null : arg
+        await update($, holidayMode, () => mode)
+        await $.store.set(STORE_HOLIDAY, mode)
+      }
+      const mode = (await read($, holidayMode)) ?? holidays.mode
+      const season = await seasonNow($, await $.clock.now(), holidays)
+      const wearing = season.holidays.map(h => h.name).join(' + ')
+      return {
+        text:
+          `Holidays: ${mode}${(await read($, holidayMode)) === null ? ' (the holidays option)' : ' (set with /crew holiday)'}. ` +
+          (wearing ? `Wearing ${wearing} outfits now.` : 'No holiday on now: the usual costumes.'),
+      }
     }
     if (sub === 'compact') {
       const p = await update($, panel, prev => ({ ...prev, isCompact: !prev.isCompact }))
@@ -899,7 +935,7 @@ export const register: Register = (on, options) => {
     bandLog.below = JSON.stringify(below).slice(0, 160)
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const costumeOf = assignCostumes(all, await rulesNow($, optionRules))
+    const costumeOf = assignCostumes(all, await rulesNow($, optionRules), await seasonNow($, at, holidays))
     const labelOf = assignLabels(all, await labelRulesNow($, labelRules), await read($, written))
     const label = (s: CrewSession) => labelOf.get(s.id) ?? s.name
 
@@ -965,7 +1001,7 @@ export const register: Register = (on, options) => {
         <Box key="session-crew-strip" flexDirection="row" gap={TERM_GAP}>
           {shown.map(i => (
             <Text key={i.session.id} wrap="truncate-end">
-              <Text color={COSTUME_COLOR[costumeOf.get(i.session.id) ?? 'other']}>▣</Text> <Text bold={i.pose !== 'finished'} dimColor={i.pose === 'finished'}>{label(i.session)}</Text>{' '}
+              <Text color={costumeColor(costumeOf.get(i.session.id) ?? 'other')}>▣</Text> <Text bold={i.pose !== 'finished'} dimColor={i.pose === 'finished'}>{label(i.session)}</Text>{' '}
               <Text color={PILL_COLOR[i.pose]} bold={i.pose === 'needs'} inverse={i.pose === 'needs'}>
                 {i.pose === 'working' ? frame(i.session, at) : i.pose === 'needs' ? ' !' : i.pose === 'stalled' ? '◷' : i.pose === 'idle' ? '○' : '✓'} {pillText(i, at)}{i.pose === 'needs' ? ' ' : ''}
               </Text>
@@ -992,7 +1028,7 @@ export const register: Register = (on, options) => {
     const at = Math.max(await read($, now), ...all.map(s => s.changedAt), 0)
     // Faces from the crew in the order it joined, never the panel's status order,
     // so a session changing state never swaps crabs with another.
-    const costumeOf = assignCostumes(all, await rulesNow($, optionRules))
+    const costumeOf = assignCostumes(all, await rulesNow($, optionRules), await seasonNow($, at, holidays))
     const costume = (s: CrewSession) => costumeOf.get(s.id) ?? 'other'
     const labelOf = assignLabels(all, await labelRulesNow($, labelRules), await read($, written))
     const label = (s: CrewSession) => labelOf.get(s.id) ?? s.name
@@ -1081,7 +1117,7 @@ export const register: Register = (on, options) => {
                 <Svg
                   key={r.session.id}
                   source={mainRowSvg(RW, r, label(r.session), costume(r.session), at, missed?.id === r.session.id)}
-                  alt={`${label(r.session)}, the ${WEARS[costume(r.session)]} crab: ${paneRowText(r, at)}`}
+                  alt={`${label(r.session)}, the ${wears(costume(r.session))} crab: ${paneRowText(r, at)}`}
                   width={RW}
                   height={MAIN_ROW_H}
                   isInteractive
@@ -1133,7 +1169,7 @@ export const register: Register = (on, options) => {
       return (
         <Box key={s.id} flexDirection="column" marginBottom={1}>
           <Box flexDirection="row" gap={1}>
-            <Text color={COSTUME_COLOR[costume(s)]}>▣</Text>
+            <Text color={costumeColor(costume(s))}>▣</Text>
             <Text dimColor>{r.kind === 'working' ? frame(s, at) : KIND_GLYPH[r.kind]}</Text>
             <Text bold wrap="truncate-end">
               {label(s)}
@@ -1153,7 +1189,7 @@ export const register: Register = (on, options) => {
     }
     const lineRow = (s: CrewSession, right: string) => (
       <Box key={s.id} flexDirection="row" gap={1}>
-        <Text color={COSTUME_COLOR[costume(s)]}>▣</Text>
+        <Text color={costumeColor(costume(s))}>▣</Text>
         <Text wrap="truncate-end">{label(s)}</Text>
         <Text dimColor>{right}</Text>
       </Box>
@@ -1166,7 +1202,7 @@ export const register: Register = (on, options) => {
         {p.isCompact ? (
           <Text key="strip" wrap="truncate-end">
             {main.map(r => (
-              <Text key={r.session.id} color={COSTUME_COLOR[costume(r.session)]}>
+              <Text key={r.session.id} color={costumeColor(costume(r.session))}>
                 ▣{frame(r.session, at)}{' '}
               </Text>
             ))}

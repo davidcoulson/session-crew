@@ -269,44 +269,6 @@ export const CHRISTMAS: Holiday = {
       },
     },
     {
-      id: 'xmas-angel',
-      name: 'Angel',
-      note: 'a gold halo, white wings and a white gown; floats while the wings flap',
-      float: true,
-      draw: (f, pose) => {
-        crabBody(f, pose)
-        stamp(f, 7, 16, [
-          '..gggggggggggg..',
-          '.gwwwwwwwwwwwwg.',
-          '.wwwwwwwwwwwwww.',
-          'gwwwwwwwwwwwwwwg',
-          'gwwwwwwwwwwwwwwg',
-          'yyyyyyyyyyyyyyyy',
-        ], { w: C.white, g: C.shade, y: C.gold })
-        const wing = { w: C.white, g: '#B9B7AE' }
-        stamp(f, 0, 7, ['...gww', '.gwwww', 'gwwwww', 'gwwwww', '.gwwww', '..gwgw', '...g.g'], wing, 'fp a')
-        stamp(f, 24, 7, ['wwg...', 'wwwwg.', 'wwwwwg', 'wwwwwg', 'wwwwg.', 'wgwg..', 'g.g...'], wing, 'fp b')
-        stamp(f, 10, 4, ['.yyyyyyyy.', 'y........y', '.yyyyyyyy.'], { y: C.gold }, 'up')
-      },
-    },
-    {
-      id: 'caroler',
-      name: 'Caroler',
-      note: 'earmuffs, a striped scarf and a red songbook; music notes rise as it sings',
-      draw: (f, pose) => {
-        crabBody(f, pose, 0, 'bk')
-        stamp(f, 7, 6, ['....llllllll....', '..ll........ll..', '.l............l.', '.l............l.'], { l: C.gray })
-        stamp(f, 5, 9, ['.mm', 'mmm', 'mmM', '.mM'], { m: '#E35B8F', M: '#B03A6A' })
-        stamp(f, 22, 9, ['mm.', 'mmm', 'Mmm', 'Mm.'], { m: '#E35B8F', M: '#B03A6A' })
-        stamp(f, 13, 15, ['.kk.', 'k..k', '.kk.'], { k: INK })
-        stamp(f, 7, 18, ['gggrrrgggrrrgggr', 'rrrgggrrrgggrrrg'], { g: C.green, r: C.red })
-        stamp(f, 9, 20, ['gg', 'rr', 'gg', 'ww'], { g: C.green, r: C.red, w: C.white })
-        stamp(f, 23, 10, ['.ww.ww.', 'wgwrwgw', 'wwwrwww', 'rrrrrrr'], { r: C.red, w: C.white, g: C.gray }, 'bk')
-        stamp(f, 24, 3, ['.yy', '.y.', 'yy.', 'yy.'], { y: C.gold }, 'rs')
-        stamp(f, 19, 2, ['.yy', '.y.', 'yy.', 'yy.'], { y: '#F09AC0' }, 'rs2')
-      },
-    },
-    {
       id: 'xmas-skater',
       name: 'Ice skater',
       note: 'a bobble hat and white ice skates; snowflakes drift down',

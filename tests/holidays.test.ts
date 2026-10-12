@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { HOLIDAYS, HOLIDAY_CSS, OUTFITS, activeHolidays, assignOutfits, holidayCrab, holidaysOn } from '../hooks/holidays'
+import { HOLIDAYS, HOLIDAY_CSS, OUTFITS, activeHolidays, assignOutfits, costumeColor, crab, holidayCrab, holidaysOn, seasonAt, wears } from '../hooks/holidays'
+import { assignCostumes } from '../hooks/parse'
+import type { CrewSession } from '../types'
 import type { CrabPose } from '../hooks/crab'
 import { easterSunday } from '../hooks/holidays/easter'
 import { thanksgivingDay } from '../hooks/holidays/thanksgiving'
@@ -26,10 +28,10 @@ function wellFormed(svg: string): string | undefined {
 }
 
 describe('holiday outfits', () => {
-  test('8 to 12 named outfits per holiday, ids unique', () => {
+  test('4 to 12 named outfits per holiday, ids unique', () => {
     const ids = new Set<string>()
     for (const h of HOLIDAYS) {
-      expect(h.outfits.length >= 8 && h.outfits.length <= 12).toBe(true)
+      expect(h.outfits.length >= 4 && h.outfits.length <= 12).toBe(true)
       for (const o of h.outfits) {
         expect(/^[a-z][a-z0-9-]*$/.test(o.id)).toBe(true)
         expect(ids.has(o.id)).toBe(false)
@@ -134,5 +136,46 @@ describe('switching on (proposal)', () => {
     const first = assignOutfits(ids.slice(0, 1), h, 2026)
     expect(first.get(ids[0] ?? '')).toBe(a.get(ids[0] ?? ''))
     expect(assignOutfits(ids, [], 2026).size).toBe(0)
+  })
+})
+
+describe('wearing them', () => {
+  const session = (n: number, name: string): CrewSession => ({
+    id: `local_${String(n).padStart(8, '0')}-0000-0000-0000-000000000000`, name, title: name, status: 'working', startedAt: n, changedAt: n, slot: n,
+  })
+  const crew = [session(0, 'nut-pr'), session(1, 'prismarr'), session(2, 'gpu'), session(3, 'dns')]
+  const halloween = seasonAt(new Date(2026, 9, 20).getTime())
+
+  test('in a season, sessions without a rule wear its outfits, all different', () => {
+    expect(halloween.holidays.map(h => h.id)).toEqual(['halloween'])
+    const got = assignCostumes(crew, [], halloween)
+    const ids = [...got.values()]
+    expect(new Set(ids).size).toBe(crew.length)
+    for (const id of ids) expect(OUTFITS.get(id)?.holiday.id).toBe('halloween')
+    // Out of season: the usual rotation.
+    expect([...assignCostumes(crew, [], seasonAt(new Date(2026, 7, 1).getTime())).values()]).toEqual(['fable', 'heavy', 'careful', 'medium'])
+  })
+
+  test('rules win, and may name a holiday outfit or a costume', () => {
+    const got = assignCostumes(crew, [['nut-*', 'engineer'], ['gpu', 'Santa']], halloween)
+    expect(got.get(crew[0]?.id ?? '')).toBe('careful')
+    expect(got.get(crew[2]?.id ?? '')).toBe('santa')
+    expect(OUTFITS.get(got.get(crew[1]?.id ?? '') ?? '')?.holiday.id).toBe('halloween')
+  })
+
+  test('skip leaves a holiday out, unless it is forced; New Year keeps its year past midnight', () => {
+    expect(seasonAt(new Date(2026, 9, 20).getTime(), 'auto', ['halloween']).holidays).toEqual([])
+    expect(seasonAt(new Date(2026, 5, 1).getTime(), 'halloween', ['halloween']).holidays.map(h => h.id)).toEqual(['halloween'])
+    expect(seasonAt(new Date(2026, 11, 31).getTime()).year).toBe(2026)
+    expect(seasonAt(new Date(2027, 0, 1).getTime()).year).toBe(2026)
+  })
+
+  test('one crab call draws both kinds, with a colour and words for each', () => {
+    expect(crab(0, 0, 'witch', 'working')).toContain('c-h-witch hol run')
+    expect(crab(0, 0, 'heavy', 'working')).toContain('c-heavy run')
+    expect(costumeColor('heavy')).toBe('#D85A30')
+    expect(costumeColor('witch')).toBe('#7F4FB8')
+    expect(wears('heavy')).toBe('detective')
+    expect(wears('pumpkin')).toBe("jack-o'-lantern")
   })
 })

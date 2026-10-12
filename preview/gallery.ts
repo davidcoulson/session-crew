@@ -2,7 +2,7 @@
 // (hooks/holidays.ts on top of hooks/crab.ts, the pills from hooks/band.ts).
 // scripts/build-preview.ts bundles it into preview/holidays.html.
 
-import { HOLIDAYS, HOLIDAY_CSS, activeHolidays, assignOutfits, holidayCrab } from '../hooks/holidays'
+import { HOLIDAYS, HOLIDAY_COLOR as TINT, HOLIDAY_CSS, activeHolidays, assignOutfits, holidayCrab } from '../hooks/holidays'
 import type { Holiday } from '../hooks/holidays'
 import { PILL_CSS, cardHeight, pillSvg } from '../hooks/band'
 import type { CrabPose } from '../hooks/crab'
@@ -17,13 +17,6 @@ const POSES: { pose: CrabPose; strip: StripPose; label: string; pill: string }[]
   { pose: 'idle', strip: 'idle', label: 'idle', pill: 'idle 8m' },
   { pose: 'done', strip: 'done', label: 'done', pill: 'done · PR #12' },
 ]
-
-// A colour per holiday for the calendar and the section marks.
-const TINT: Record<string, string> = {
-  newyear: '#C9A227', lunarnewyear: '#D0312D', valentine: '#E0558A', stpatrick: '#2E8B4A', easter: '#9C7FD1',
-  july4: '#2F5DA8', muertos: '#E8761E', halloween: '#7F4FB8', diwali: '#E09A1A', thanksgiving: '#A0522D',
-  hanukkah: '#3B7DD8', christmas: '#2E7D4F',
-}
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, html = ''): HTMLElementTagNameMap[K] => {
   const e = document.createElement(tag)

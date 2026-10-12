@@ -131,7 +131,7 @@ body.paused svg * { animation-play-state: paused !important }
   <header class="top">
     <p class="eyebrow">session-crew · design preview</p>
     <h1>Holiday wardrobe</h1>
-    <p class="lede">Seasonal outfits for the crew's crabs, drawn by the mod's own crab code at the strip's real size and three times larger. <b id="count"></b>. Nothing is switched on yet. Everything is kept unless you tick <b>Drop</b>; then copy the list back to Claude.</p>
+    <p class="lede">Seasonal outfits for the crew's crabs, drawn by the mod's own crab code at the strip's real size and three times larger. <b id="count"></b>. They switch on by themselves in each holiday's window. To retire one, tick <b>Drop</b> and copy the list back to Claude.</p>
     <div class="controls">
       <span>3× stage</span>
       <span class="seg" role="group" aria-label="Background behind the large crabs">
@@ -144,8 +144,8 @@ body.paused svg * { animation-play-state: paused !important }
   </header>
 
   <section class="proposal" aria-labelledby="how">
-    <h2 id="how">How they would switch on</h2>
-    <p>A proposal, not built yet. Outside every window the crabs wear their usual costumes. Moving holidays (Lunar New Year, Easter, Hanukkah, Diwali, Thanksgiving) are worked out or looked up per year; the bars below come from the same window code.</p>
+    <h2 id="how">How they switch on</h2>
+    <p>Outside every window the crabs wear their usual costumes. Moving holidays (Lunar New Year, Easter, Hanukkah, Diwali, Thanksgiving) are worked out or looked up per year; the bars below come from the same window code.</p>
     <div class="calwrap" id="calendar"></div>
     <div class="cols">
       <div>
@@ -165,7 +165,7 @@ body.paused svg * { animation-play-state: paused !important }
       </div>
       <div>
         <h3>Turning it off, or forcing one</h3>
-        <p>A new option, plus a command for trying them out:</p>
+        <p>The <code>holidays</code> option, plus a command for trying them out:</p>
 <pre>"pluginConfigs": {
   "session-crew": {
     "options": {

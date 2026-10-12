@@ -114,6 +114,8 @@ declare module 'claude-code' {
       focusMiss: CrewFocusMiss | null
       /** Costume rules set with /crew face (pattern to costume), mirrored from $.store. */
       faces: Record<string, string>
+      /** /crew holiday's override of the `holidays` option (`auto`, `off` or a holiday id), mirrored from $.store; null follows the option. */
+      holidayMode: string | null
     }
   }
 }

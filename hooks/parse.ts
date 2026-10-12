@@ -2,7 +2,9 @@
 // into the crew, and picking faces. No `$` here, so tests can call them directly.
 
 import type { CrewImport, CrewListed, CrewSession, CrewStatus, TurnEnd } from '../types'
-import { ROTATION, costumeKey } from './crab'
+import { ROTATION } from './crab'
+import { assignOutfits, dressKey } from './holidays'
+import type { Season } from './holidays'
 
 export type Patch = {
   id?: string
@@ -477,16 +479,24 @@ export const parseFaceRules = (lines: readonly string[] | string | undefined): [
  * the rotation: the `costume` it got when it first joined any crew (see
  * `giveCostumes`), else by the order it joined this one (its `slot`), so a
  * session keeps its crab whatever its status and whatever joins or leaves.
+ * In a holiday `season`, sessions without a rule wear its outfits instead,
+ * picked by session id (see `assignOutfits`) in the order they joined.
  */
-export function assignCostumes(crew: readonly CrewSession[], rules: [string, string][]): Map<string, string> {
+export function assignCostumes(crew: readonly CrewSession[], rules: [string, string][], season?: Season): Map<string, string> {
   const compiled = rules
-    .map(([p, name]) => [globRe(p), costumeKey(name)] as const)
+    .map(([p, name]) => [globRe(p), dressKey(name)] as const)
     .filter((r): r is readonly [RegExp, string] => r[1] !== undefined)
   const out = new Map<string, string>()
+  const unruled: { id: string; order: number }[] = []
   crew.forEach((s, i) => {
     const hit = compiled.find(([re]) => re.test(s.name) || re.test(s.title) || re.test(s.id))
     out.set(s.id, hit ? hit[1] : s.costume ?? ROTATION[(s.slot ?? i) % ROTATION.length] ?? 'other')
+    if (!hit) unruled.push({ id: s.id, order: s.slot ?? i })
   })
+  if (season?.holidays.length) {
+    const ids = unruled.sort((a, b) => a.order - b.order).map(u => u.id)
+    for (const [id, outfit] of assignOutfits(ids, season.holidays, season.year)) out.set(id, outfit)
+  }
   return out
 }
 
