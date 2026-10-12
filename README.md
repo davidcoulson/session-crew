@@ -34,7 +34,7 @@ button shows that session in the app's main pane (see "Opening a session" below)
 | status | the pill: working, needs you, stalled, idle, proposed, done (with its PR) |
 
 Buttons under the rows: **Crabs only** (the main list as a strip of crabs) and **Refresh**. The status line also
-carries `crew: 2 working · 1 sleeping`.
+carries `crew: 2 working · 1 needs you · 1 stalled · 14 idle`.
 
 ### The strip above the prompt
 
@@ -59,10 +59,12 @@ any sentence ends in "?" or hands you the next move: "want me to", "should I", "
 option", "let me know", "please confirm", "once you approve", "needs your go-ahead", "decisions needed". Else it is a
 **promise** when its closing lines say it will check back by itself ("I'll check in about 2½ minutes", "will verify
 after the restart", "I'll deploy when the build finishes"). Anything else is a **report**. The app doesn't tell a mod
-about pending permission prompts, so those don't count. Hover a card for the question or promise it read. Sleeping sessions never draw a crab here; the summary counts them, and when
-everyone is asleep the strip is just that count ("13 sessions · 13 sleeping"), which opens the pane. With more than six, the needs-you, stalled and working cards show and the rest
-are `+N more`. Beside the cards, **"5 sessions · 2 working · 1 needs you · 1 stalled · 1 done · 13 sleeping"** (just
-`● 2  ! 1  ◷ 1  ✓ 1  z 13` when narrow; `○` counts idle) opens the pane. Hover a card for the session's full title and status.
+about pending permission prompts, so those don't count. Hover a card for the question or promise it read. Sleeping sessions never draw a crab here; when everyone is asleep the strip
+is just their count, `z 13`, which opens the pane. With more than six (or more than fit), the needs-you, stalled and working cards
+show and the rest fold into **`+N more`**. On the desktop there are no summary words beside the crabs, which say it
+already: the one control after them opens the pane, `+N more` when cards are folded, else a quiet `⋯`. The terminal
+keeps its counts after the cards ("5 sessions · 2 working · 1 needs you · …", or `● 2  ! 1  ◷ 1  ○ 1  ✓ 1  z 13` when
+narrow; `○` counts idle), which open the pane. Hover a card for the session's full title and status.
 
 ### Opening a session
 

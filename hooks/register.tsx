@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CrewImport, CrewPanel, CrewSession, CrewStatus } from '../types'
 import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
-import { CSS, FONT, MAIN_ROW_H, PILL_COLOR, SLEEP_ROW_H, TERM_GAP, cardCrabSvg, cardOf, cardPillSvg, cells, clipCells, fitTerminalRow, layoutStrip, mainRowSvg, sleepRowSvg, termCardCells } from './band'
+import { CSS, FONT, MAIN_ROW_H, PILL_COLOR, SLEEP_ROW_H, TERM_GAP, cardCrabSvg, cardOf, cardPillSvg, clipCells, fitTerminalRow, layoutStrip, mainRowSvg, sleepRowSvg, termCardCells } from './band'
 import {
   assignCostumes,
   describeFilter,
@@ -446,6 +446,9 @@ const sorted = (list: CrewSession[]): CrewSession[] =>
 
 // ---------------------------------------------------------------------------
 // Desktop drawing: one SVG per row, animated by CSS alone.
+
+// The desktop strip's control for the pane, beside the crabs when none is folded away.
+const PANE_GLYPH = '⋯'
 
 // Room each pane row leaves for its Open button.
 const OPEN_W = 64
@@ -900,15 +903,15 @@ export const register: Register = (on, options) => {
     const labelOf = assignLabels(all, await labelRulesNow($, labelRules), await read($, written))
     const label = (s: CrewSession) => labelOf.get(s.id) ?? s.name
 
-    // Everyone asleep: no crab, only the count, which opens the pane.
+    // Everyone asleep: no crab, only a short count ("z 25"), which opens the pane.
     if (!items.length) {
       const cols = e.props.bodyColumns || 80
-      const words = stripSummary(items, false, sleepingCount)
+      const words = stripSummary(items, true, sleepingCount)
       bandLog.drew = 0
       return (
         <Box flexDirection="column">
           <Box key="session-crew-strip" flexDirection="row">
-            <Button key="session-crew-open" label={e.surface !== 'desktop' && cells(words) > cols ? clipCells(stripSummary(items, true, sleepingCount), cols) : words} plain onPress={() => void togglePane($)} />
+            <Button key="session-crew-open" label={e.surface !== 'desktop' ? clipCells(words, cols) : words} plain onPress={() => void togglePane($)} />
           </Box>
           {below}
         </Box>
@@ -918,9 +921,8 @@ export const register: Register = (on, options) => {
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
       const W = Math.max(200, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 16))
-      const { summary, cards, more } = layoutStrip(W, items, i => cardOf(i, label(i.session), costumeOf.get(i.session.id) ?? 'other', at, stripScale), stripScale, isNarrow =>
-        stripSummary(items, isNarrow, sleepingCount),
-      )
+      // No summary beside the crabs (they say it): only the pane's control, "+N more" when cards are folded, else "⋯".
+      const { cards, more } = layoutStrip(W, items, i => cardOf(i, label(i.session), costumeOf.get(i.session.id) ?? 'other', at, stripScale), stripScale, () => PANE_GLYPH)
       bandLog.drew = cards.length
       // A card per session: its crab, and beside it its label (a button: it shows the session in the
       // main pane) over its status pill. Svg takes no press, and a Button holds only text.
@@ -941,8 +943,7 @@ export const register: Register = (on, options) => {
                 </Box>
               )
             })}
-            {more > 0 && <Text dimColor>+{more} more</Text>}
-            <Button key="session-crew-open" label={summary} plain onPress={() => void togglePane($)} />
+            <Button key="session-crew-open" label={more > 0 ? `+${more} more` : PANE_GLYPH} plain dimColor onPress={() => void togglePane($)} />
           </Box>
           {below}
         </Box>

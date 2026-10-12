@@ -829,7 +829,8 @@ describe('hooks', () => {
       expect(await ui.find({ type: 'Button', key: 'session-crew-open' })).toBeDefined()
       if (surface === 'desktop') expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toContain('Busy crab: working')
       else expect(await ui.find({ type: 'Text', text: /Busy crab/ })).toBeDefined()
-      expect((await ui.find({ type: 'Button', key: 'session-crew-open' }))?.text).toContain('1 working')
+      // The desktop's crabs say it all: beside them only the pane's control; the terminal keeps its counts.
+      expect((await ui.find({ type: 'Button', key: 'session-crew-open' }))?.text).toBe(surface === 'desktop' ? '⋯' : '1 session · 1 working')
       await ui.unmount()
     }
     expect((await $.command.run({ command: 'crew', args: 'strip off' } as never)).text).toContain('off')
@@ -994,7 +995,7 @@ describe('hooks', () => {
         props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: cols, scroll: { bodyRows: 9, offset: 0, total: 0 } },
       } as never)
       const button = await ui.find({ type: 'Button', key: 'session-crew-open' })
-      expect(button?.text).toBe(cols > 20 ? '3 sessions · 3 sleeping' : 'z 3')
+      expect(button?.text).toBe('z 3')
       expect(await ui.find({ type: 'Svg' })).toBeUndefined()
       await ui.unmount()
     }
@@ -1082,6 +1083,26 @@ describe('hooks', () => {
     // Read once it answered: not asked again this idle spell.
     await clock.advance(120_000)
     expect(reads).toBe(3)
+  })
+
+  test('the desktop strip folds extra cards into a "+N more" that opens the pane', { options: { pollSeconds: 0 } }, async ($, on) => {
+    host(on)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+    await $.tool.call({
+      tool: 'mcp__session-crew__status',
+      sessions: [1, 2, 3, 4, 5, 6, 7, 8].map(n => ({ id: `local_00000000-0000-0000-0000-00000000050${n}`, name: `w${n}`, title: `Worker number ${n}`, status: 'working' })),
+    } as never)
+    const ui = await $.ui.mount({ plugin: 'session-crew', component: 'AbovePrompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { bodyRows: 9, offset: 0, total: 0 } } } as never)
+    const cards = (await ui.findAll({ type: 'Button' })).filter(b => String(b.key).startsWith('open:'))
+    const control = await ui.find({ type: 'Button', key: 'session-crew-open' })
+    expect(cards.length).toBeGreaterThan(0)
+    expect(control?.text).toBe(`+${8 - cards.length} more`)
+    // No summary words anywhere in the strip.
+    expect(await ui.find({ type: 'Text', text: /sessions ·|working ·/ })).toBeUndefined()
+    await ui.press({ key: 'session-crew-open' })
+    expect(seen.opened).toBe(1)
+    await ui.unmount()
   })
 
   test('pressing a crab card shows its session; refused, the pane opens with its row marked', { options: { pollSeconds: 0 } }, async ($, on) => {
