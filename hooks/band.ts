@@ -4,7 +4,7 @@
 
 import { CRAB_CSS, crab } from './crab'
 import type { CrabPose } from './crab'
-import { fmtAgo, paneRowText, pillText, prOf, stripShown } from './parse'
+import { fmtAgo, paneRowText, paneSubText, pillText, stripShown } from './parse'
 import type { PaneRow, StripItem, StripPose } from './parse'
 import type { CrewSession } from '../types'
 
@@ -26,17 +26,19 @@ export const CSS = `<style>
 const STRIP_FONT_LABEL = 12.5
 const STRIP_FONT_PILL = 10.5
 
-const PILL_CLASS: Record<StripPose, string> = { needs: 'pn', working: 'pw', idle: 'pi', done: 'pd', finished: 'pd' }
+const PILL_CLASS: Record<StripPose, string> = { needs: 'pn', stalled: 'ps', working: 'pw', idle: 'pi', done: 'pd', finished: 'pd' }
 
 // The pill's own colours, light and dark: needs-you is solid, the rest tinted.
 export const PILL_CSS = `<style>
 .pw rect{fill:#E3EEFB}.pw text{fill:#1F5FA8}.pw .ic{fill:#378ADD}
 .pn rect{fill:#D85A30}.pn text{fill:#fff}.pn .ic{fill:#fff}
+.ps rect{fill:#F6EBD8}.ps text{fill:#8A5510}.ps .icl{stroke:#BA7517}
 .pi rect{fill:#EEEDEA}.pi text{fill:#5f5f5b}.pi .ic{fill:#8a8a86}
 .pd rect{fill:#E2F3E7}.pd text{fill:#2B7446}.pd .ick{stroke:#3B9C5F}
 @media (prefers-color-scheme: dark){
 .pw rect{fill:#1E3550}.pw text{fill:#A9CCF5}.pw .ic{fill:#6AAEF0}
 .pn rect{fill:#E0683E}
+.ps rect{fill:#3D2E17}.ps text{fill:#F0C98A}.ps .icl{stroke:#E0A54A}
 .pi rect{fill:#2E2E2C}.pi text{fill:#B5B5B0}.pi .ic{fill:#8f8f8a}
 .pd rect{fill:#1F3B29}.pd text{fill:#98D8AE}.pd .ick{stroke:#6CC28A}}
 .pulse{animation:pulse 1.2s ease-in-out infinite}@keyframes pulse{50%{opacity:.35}}
@@ -44,13 +46,16 @@ export const PILL_CSS = `<style>
 @media (prefers-reduced-motion: reduce){.pulse{animation:none}}
 </style>`
 
-const CRAB_POSE: Record<StripPose, CrabPose> = { needs: 'waiting', working: 'working', idle: 'idle', done: 'done', finished: 'finished' }
+const CRAB_POSE: Record<StripPose, CrabPose> = { needs: 'waiting', stalled: 'idle', working: 'working', idle: 'idle', done: 'done', finished: 'finished' }
 
 // The pill's icon, drawn, in a 10×10 box at (x, y).
 export function pillIcon(pose: StripPose, x: number, y: number): string {
   if (pose === 'working') return `<circle class="ic pulse" cx="${x + 4}" cy="${y + 5}" r="3.2"/>`
   if (pose === 'needs') return `<text class="ic" x="${x + 2.5}" y="${y + 9}" font-family="${FONT}" font-size="11" font-weight="800">!</text>`
-  if (pose === 'idle') return `<text class="ic" x="${x + 1}" y="${y + 8.5}" font-family="${FONT}" font-size="10" font-weight="700">z</text>`
+  // Stalled: a small clock, it said it would come back later.
+  if (pose === 'stalled')
+    return `<g class="icl" fill="none" stroke-width="1.4" stroke-linecap="round"><circle cx="${x + 4.5}" cy="${y + 5}" r="3.6"/><path d="M${x + 4.5} ${y + 3}v2.2l1.6 1"/></g>`
+  if (pose === 'idle') `<text class="ic" x="${x + 1}" y="${y + 8.5}" font-family="${FONT}" font-size="10" font-weight="700">z</text>`
   return `<path class="ick" d="M${x + 1} ${y + 5.2}l2.6 2.6 5.2-5.6" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
 }
 
@@ -68,15 +73,20 @@ const emOf = (ch: string): number => (isWide(ch) ? 1.05 : /[\sil.,:;'|!()]/.test
 
 const pillWidth = (pill: string): number => Math.ceil(textW(pill, STRIP_FONT_PILL, true) + 24)
 
+/** What a desktop button adds around its label, roughly. */
+const BUTTON_PAD = 20
+
 export type Card = { item: StripItem; label: string; costume: string; title: string; pill: string; width: number }
 
 export function cardOf(item: StripItem, label: string, costume: string, at: number, scale: number): Card {
   // The pill's icon is its check mark: the words needn't repeat it.
   const pill = pillText(item, at).replace(/ ✓$/, '')
   const crabW = 30 * scale
-  const width = Math.ceil(crabW + 8 + Math.max(textW(label, STRIP_FONT_LABEL, true), pillWidth(pill)) + 16)
+  // The label is drawn as a button (its padding), the pill under it.
+  const width = Math.ceil(crabW + 8 + Math.max(textW(label, STRIP_FONT_LABEL, true) + BUTTON_PAD, pillWidth(pill)) + 16)
   const s = item.session
-  const title = `${s.title || s.name} (${s.name}): ${pillText(item, at)}`
+  const hint = (item.pose === 'needs' || item.pose === 'stalled') && s.turnHint ? ` · "${s.turnHint}"` : ''
+  const title = `${s.title || s.name} (${s.name}): ${pillText(item, at)}${hint} · click to open`
   return { item, label, costume, title, pill, width }
 }
 
@@ -114,14 +124,20 @@ export function bandSvg(W: number, cards: Card[], more: number, scale: number): 
  * ("4 sessions · 2 working · …") when the cards all fit beside it, else the
  * counts alone ("● 2  ! 1"), whichever shows more cards.
  */
-export function layoutStrip(W: number, items: StripItem[], make: (i: StripItem) => Card, scale: number, summary: (isNarrow: boolean) => string): { band: ReturnType<typeof bandSvg>; summary: string; shown: number } {
+export function layoutStrip(
+  W: number,
+  items: StripItem[],
+  make: (i: StripItem) => Card,
+  scale: number,
+  summary: (isNarrow: boolean) => string,
+): { band: ReturnType<typeof bandSvg>; summary: string; shown: number; cards: Card[]; more: number } {
   const tryWith = (isNarrow: boolean) => {
     const text = summary(isNarrow)
     const room = W - textW(text, 13) - 24
     // Narrow, no card is forced: the counts and "+N more" alone, rather than a row wider than the band.
     const { cards, more } = fitCards(room, items, make, isNarrow ? 0 : 1)
     const band = bandSvg(Math.max(60, room), cards, more, scale)
-    return { band, summary: text, shown: cards.length, more, fits: band.width + textW(text, 13) + 24 <= W }
+    return { band, summary: text, shown: cards.length, cards, more, fits: band.width + textW(text, 13) + 24 <= W }
   }
   const full = tryWith(false)
   if (!full.more && full.fits) return full
@@ -130,7 +146,7 @@ export function layoutStrip(W: number, items: StripItem[], make: (i: StripItem) 
     // Too narrow for a card beside even the counts: one card, as wide as the band allows, and the
     // counts wrap onto their own line (the desktop wraps a band's siblings), rather than no crab at all.
     const { cards, more } = fitCards(W, items, make, 1)
-    return { band: bandSvg(W, cards, more, scale), summary: narrow.summary, shown: cards.length }
+    return { band: bandSvg(W, cards, more, scale), summary: narrow.summary, shown: cards.length, cards, more }
   }
   if (!full.fits) return narrow
   return narrow.shown > full.shown ? narrow : full
@@ -151,7 +167,35 @@ export function fitCards(W: number, items: StripItem[], make: (i: StripItem) => 
   return { cards: shown.map(i => all[items.indexOf(i)] ?? make(i)), more }
 }
 
-export const PILL_COLOR: Record<StripPose, string> = { needs: '#D85A30', working: '#378ADD', idle: '#8a8a86', done: '#3B9C5F', finished: '#3B9C5F' }
+export const PILL_COLOR: Record<StripPose, string> = { needs: '#D85A30', stalled: '#BA7517', working: '#378ADD', idle: '#8a8a86', done: '#3B9C5F', finished: '#3B9C5F' }
+
+// --- the desktop strip as pressable cards: each card's crab and pill drawn apart, its label a Button between.
+
+/** One card's crab, alone, as tall as the card. */
+export function cardCrabSvg(c: Card, scale: number): { source: string; width: number; height: number } {
+  const H = cardHeight(scale)
+  const width = Math.ceil(30 * scale + 4)
+  const crabH = 28 * scale
+  return {
+    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${H}" viewBox="0 0 ${width} ${H}">${CRAB_CSS}<title>${xml(c.title)}</title>${crab(0, (H - crabH) / 2, c.costume, CRAB_POSE[c.item.pose], scale)}</svg>`,
+    width,
+    height: H,
+  }
+}
+
+/** One card's status pill, alone. */
+export function cardPillSvg(c: Card): { source: string; width: number; height: number } {
+  const p = pillSvg(0, 1, c.item.pose === 'finished' ? 'finished' : c.item.pose, c.pill)
+  const muted = c.item.pose === 'finished' ? ' class="muted"' : ''
+  return {
+    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${p.width}" height="18" viewBox="0 0 ${p.width} 18">${PILL_CSS}<title>${xml(c.title)}</title><g${muted}>${p.svg}</g></svg>`,
+    width: p.width,
+    height: 18,
+  }
+}
+
+/** The strip's height at a crab scale. */
+export const cardHeight = (scale: number): number => Math.max(44, Math.round(28 * scale + 8))
 
 
 // --- the terminal's strip: the same cards in text, sized in cells.
@@ -221,8 +265,8 @@ export function pillSvg(x: number, y: number, pose: StripPose, text: string): { 
   }
 }
 
-const KIND_POSE: Record<PaneRow['kind'], StripPose> = { needs: 'needs', working: 'working', proposed: 'idle', done: 'done' }
-const KIND_CRAB: Record<PaneRow['kind'], CrabPose> = { needs: 'waiting', working: 'working', proposed: 'proposed', done: 'finished' }
+const KIND_POSE: Record<PaneRow['kind'], StripPose> = { needs: 'needs', stalled: 'stalled', working: 'working', idle: 'idle', proposed: 'idle', done: 'done' }
+const KIND_CRAB: Record<PaneRow['kind'], CrabPose> = { needs: 'waiting', stalled: 'idle', working: 'working', idle: 'idle', proposed: 'proposed', done: 'finished' }
 
 const clipToWidth = (text: string, size: number, maxW: number, bold = false): string => {
   if (textW(text, size, bold) <= maxW) return text
@@ -242,25 +286,29 @@ export const SLEEP_ROW_H = 28
 
 /** Who a session is, for its hover: the whole title, the handle, and the app's note ("started by …"). */
 export const hoverOf = (s: CrewSession, status: string): string =>
-  `${s.title || s.name} (${s.name})${s.note ? ` · ${s.note}` : ''}: ${status}`
+  `${s.title || s.name} (${s.name})${s.note ? ` · ${s.note}` : ''}: ${status}${s.turnHint && /^(?:needs you|stalled)/.test(status) ? ` · "${s.turnHint}"` : ''}`
+
+/** The tint behind a row the pane points out (a press that could not switch to it). */
+const MARK = `<style>.mk{fill:#FBE3D8}@media (prefers-color-scheme: dark){.mk{fill:#4A2A1D}}</style>`
 
 /**
- * A main row, two lines: the crab, the label, and under it the title (when it
- * says more than the label) and the PR; the status pill on the right.
+ * A main row, two lines: the crab, the label, and under it what it asked (needs
+ * you), what it promised (stalled), else the title (when it says more than
+ * the label) and the PR; the status pill on the right. `isMarked` tints it.
  */
-export function mainRowSvg(W: number, r: PaneRow, label: string, costume: string, at: number): string {
+export function mainRowSvg(W: number, r: PaneRow, label: string, costume: string, at: number, isMarked = false): string {
   const s = r.session
   const status = paneRowText(r, at)
   const pose = KIND_POSE[r.kind]
   const pillW = pillWidth(status)
   const textMax = W - 46 - pillW - 14
-  const sub = [s.title && s.title !== label ? s.title : '', r.kind !== 'done' ? prOf(s) ?? '' : ''].filter(Boolean).join(' · ')
+  const sub = paneSubText(r, label)
   const pill = pillSvg(W - pillW, 9, r.kind === 'done' && at - (s.endedAt ?? at) >= 5_000 ? 'finished' : pose, status)
   const crabPose: CrabPose = r.kind === 'done' && at - (s.endedAt ?? at) < 5_000 ? 'done' : KIND_CRAB[r.kind]
   return paneSvg(
     W,
     MAIN_ROW_H,
-    `<g><title>${xml(hoverOf(s, status))}</title>
+    `${isMarked ? `${MARK}<rect class="mk" x="0" y="0" width="${W}" height="${MAIN_ROW_H}" rx="6"/>` : ''}<g><title>${xml(hoverOf(s, status))}</title>
 ${crab(2, 12, costume, crabPose)}
 <text class="t" x="46" y="22" font-family="${FONT}" font-size="13" font-weight="600">${xml(clipToWidth(label, 13, textMax, true))}</text>
 <text class="s" x="46" y="39" font-family="${FONT}" font-size="11">${xml(clipToWidth(sub, 11, W - 46 - 4))}</text>
@@ -270,12 +318,12 @@ ${pill.svg}
 }
 
 /** A one-line row: a small resting crab, the label, and on the right "idle 8m" (or `right`: "done · PR #226"). */
-export function sleepRowSvg(W: number, s: CrewSession, label: string, costume: string, at: number, right = `idle ${fmtAgo(at - s.changedAt)}`): string {
+export function sleepRowSvg(W: number, s: CrewSession, label: string, costume: string, at: number, right = `idle ${fmtAgo(at - s.changedAt)}`, isMarked = false): string {
   const rightW = textW(right, 11) + 4
   return paneSvg(
     W,
     SLEEP_ROW_H,
-    `<g><title>${xml(hoverOf(s, right))}</title>
+    `${isMarked ? `${MARK}<rect class="mk" x="0" y="0" width="${W}" height="${SLEEP_ROW_H}" rx="6"/>` : ''}<g><title>${xml(hoverOf(s, right))}</title>
 ${crab(4, 3, costume, 'idle', 0.75)}
 <text class="t" x="34" y="18" font-family="${FONT}" font-size="12.5" font-weight="500">${xml(clipToWidth(label, 12.5, W - 34 - rightW - 10))}</text>
 <text class="s" x="${W}" y="18" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(right)}</text></g>`,

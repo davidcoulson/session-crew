@@ -1,5 +1,12 @@
 export type CrewStatus = 'proposed' | 'working' | 'idle' | 'done' | 'dismissed'
 
+/**
+ * How a session's last turn ended, read from its last message: it `asks` you
+ * something (a question, "want me to…", "approve"), it made a `promise` to
+ * check back later (nothing will wake it), or it is a `report`.
+ */
+export type TurnEnd = 'asks' | 'promise' | 'report'
+
 export type CrewSession = {
   /** `local_…` once it runs; `task_…` while it is a proposal card. */
   id: string
@@ -27,6 +34,12 @@ export type CrewSession = {
   isArchived?: true
   /** Brought in by /crew import or the sync tool rather than seen being started. */
   isImported?: true
+  /** How its last finished turn ended, read from the app's "It reported" note or its transcript. */
+  turnEnd?: TurnEnd
+  /** When `turnEnd` was read: it describes the current idle spell only when at or after `changedAt`. */
+  turnEndAt?: number
+  /** The words that decided `turnEnd` (the question, the promise), for the hover; at most 160 characters. */
+  turnHint?: string
   /** What last told us the status (`start_session`, `linked-note`, `poll`, `tool`). */
   source: string
 }
@@ -61,6 +74,13 @@ export type CrewListed = {
   lastActivityAt?: string
 }
 
+export type CrewFocusMiss = {
+  id: string
+  /** The app's answer, or the error, in a few words. */
+  reason: string
+  at: number
+}
+
 export type CrewImport = {
   parent?: string
   match?: string
@@ -90,6 +110,8 @@ declare module 'claude-code' {
       labels: Record<string, string>
       /** Short labels the model wrote from titles, by session id, mirrored from $.store. */
       written: Record<string, string>
+      /** The session a press on its crab or row could not switch to, shown highlighted in the pane with why. */
+      focusMiss: CrewFocusMiss | null
       /** Costume rules set with /crew face (pattern to costume), mirrored from $.store. */
       faces: Record<string, string>
     }

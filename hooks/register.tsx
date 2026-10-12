@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { CrewImport, CrewPanel, CrewSession, CrewStatus } from '../types'
 import { COSTUME_COLOR, CRAB_CSS, WEARS, costumeKey, crab } from './crab'
-import { CSS, FONT, MAIN_ROW_H, PILL_COLOR, SLEEP_ROW_H, TERM_GAP, cardOf, cells, clipCells, fitTerminalRow, layoutStrip, mainRowSvg, sleepRowSvg, termCardCells, xml } from './band'
+import { CSS, FONT, MAIN_ROW_H, PILL_COLOR, SLEEP_ROW_H, TERM_GAP, cardCrabSvg, cardOf, cardPillSvg, cells, clipCells, fitTerminalRow, layoutStrip, mainRowSvg, sleepRowSvg, termCardCells } from './band'
 import {
   assignCostumes,
   describeFilter,
@@ -13,7 +13,6 @@ import {
   listedToPatch,
   missingAsArchived,
   nextStripChange,
-  STRIP_TIMES,
   assignLabels,
   writtenFor,
   labelPrompt,
@@ -24,6 +23,11 @@ import {
   paneGroups,
   nextPaneChange,
   paneRowText,
+  paneSubText,
+  PANE_TIMES,
+  classifyTurn,
+  lastAssistantText,
+  turnOf,
   prOf,
   stripItems,
   stripShown,
@@ -54,6 +58,7 @@ const bandNow = atom({ plugin: 'session-crew', key: 'bandNow' } as const, 0)
 const labels = atom({ plugin: 'session-crew', key: 'labels' } as const, {})
 const hidden = atom({ plugin: 'session-crew', key: 'hidden' } as const, [])
 const written = atom({ plugin: 'session-crew', key: 'written' } as const, {})
+const focusMiss = atom({ plugin: 'session-crew', key: 'focusMiss' } as const, null)
 
 const PANE = 'session-crew'
 const TITLE = 'Session crew'
@@ -65,6 +70,8 @@ const LIST = 'mcp__ccd_session_mgmt__list_sessions'
 const GET = 'mcp__ccd_session_mgmt__get_session'
 // The desktop app's session-management server, as /mcp names it.
 const MGMT_SERVER = 'ccd_session_mgmt'
+// Its window server: open_session_in shows a session in the main pane, for sessions this one started.
+const WINDOW_SERVER = 'ccd_window'
 const STORE_FACES = 'session-crew.faces'
 const STORE_IMPORT = 'session-crew.import'
 const STORE_COSTUMES = 'session-crew.costumes'
@@ -96,6 +103,10 @@ const ORDER: CrewStatus[] = ['working', 'idle', 'proposed', 'done', 'dismissed']
 
 const textOf = (r: { text?: string; result?: unknown }): string =>
   typeof r.text === 'string' ? r.text : typeof r.result === 'string' ? r.result : JSON.stringify(r.result ?? '')
+
+// The text blocks of an MCP tool's answer.
+const mcpText = (r: { content: readonly unknown[] }): string =>
+  r.content.map(b => (b && typeof b === 'object' && 'text' in b && typeof b.text === 'string' ? b.text : '')).join('')
 
 // ---------------------------------------------------------------------------
 // Merging into state, then the status line.
@@ -130,14 +141,78 @@ async function applyNow($: EngineInterface, patches: Patch[], source: string, we
   // Another session's panel may have written the book since: keep what it added.
   if (nextBook) await $.store.set(STORE_COSTUMES, mergeBooks(await readBook($), nextBook))
   await update($, now, () => at)
-  showStatus($, list)
+  showStatus($, list, at)
+  if (list.some(s => needsTurnRead(s, at))) $.clock.after(0, () => void readTurnEnds($))
   return list
 }
 
-function showStatus($: EngineInterface, list: CrewSession[]): void {
-  const n = (s: CrewStatus) => list.filter(c => c.status === s).length
-  const parts = [n('working') && `${n('working')} working`, n('idle') && `${n('idle')} sleeping`, n('proposed') && `${n('proposed')} proposed`].filter(Boolean)
+function showStatus($: EngineInterface, list: CrewSession[], at: number): void {
+  const g = paneGroups(list, at)
+  const n = (k: string) => g.main.filter(r => r.kind === k).length
+  const parts = [
+    n('working') && `${n('working')} working`,
+    n('needs') && `${n('needs')} needs you`,
+    n('stalled') && `${n('stalled')} stalled`,
+    g.sleeping.length + n('idle') && `${g.sleeping.length + n('idle')} idle`,
+    n('proposed') && `${n('proposed')} proposed`,
+  ].filter(Boolean)
   $.ui.status(parts.length ? `crew: ${parts.join(' · ')}` : undefined)
+}
+
+// --- how an idle session's turn ended ---------------------------------------------
+// The app's "It reported" note says it for sessions this one started, when it is not
+// cut short; otherwise the session's own transcript (list_events) does, once per idle spell.
+
+// The idle spell (its changedAt) each session's transcript was read for: one read per spell per load.
+const turnRead = new Map<string, number>()
+let readingTurns = false
+
+/** An idle session the strip or pane would show, whose turn's ending is not known yet. */
+const needsTurnRead = (s: CrewSession, at: number): boolean =>
+  s.status === 'idle' &&
+  s.changeSeenAt !== undefined &&
+  s.id.startsWith('local_') &&
+  !isArchivedRow(s) &&
+  at - s.changedAt < PANE_TIMES.needsMs &&
+  turnOf(s) === undefined &&
+  turnRead.get(s.id) !== s.changedAt
+
+async function readTurnEnds($: EngineInterface): Promise<void> {
+  if (readingTurns) return
+  readingTurns = true
+  try {
+    const at = await $.clock.now()
+    const todo = (await read($, crew)).filter(s => needsTurnRead(s, at)).slice(0, 8)
+    for (const s of todo) {
+      turnRead.set(s.id, s.changedAt)
+      let text: string | null = null
+      try {
+        const r = await $.mcp.call(MGMT_SERVER, 'list_events', { session_id: s.id, limit: 8 })
+        if (!r.isError) text = lastAssistantText(mcpText(r))
+      } catch {
+        // No transcript: the turn stays unknown, drawn as plain idle.
+      }
+      if (!text) continue
+      // Only if it is still the same idle spell: one that resumed meanwhile is read again when it next stops.
+      const nowRow = (await read($, crew)).find(x => x.id === s.id)
+      if (nowRow?.status !== 'idle' || nowRow.changedAt !== s.changedAt) continue
+      await apply($, [{ id: s.id, ...classifyTurn(text) }], 'list_events')
+    }
+  } finally {
+    readingTurns = false
+  }
+}
+
+// --- showing a session in the app's main pane ---------------------------------------
+
+/** The app's refusal, in a few words. */
+function shortReason(text: string): string {
+  const t = text.replace(/^\s*refused:\s*/i, '').trim()
+  if (/not started from this session/i.test(t)) return "it wasn't started from this session; open it from the sidebar"
+  if (/isn't on screen|not on screen/i.test(t)) return "this session isn't on screen"
+  if (/text field|terminal/i.test(t)) return 'the cursor is in a text field'
+  const first = t.split(/\.\s/)[0] ?? t
+  return first.length > 120 ? first.slice(0, 119) + '…' : first || 'the app refused'
 }
 
 // A list_sessions or get_session result, from the model's call or the mod's own.
@@ -301,6 +376,36 @@ async function writeLabels($: EngineInterface): Promise<void> {
   }
 }
 
+/**
+ * A press on a session's crab card or pane row: the app shows it in the main
+ * pane (open_session_in, focus). Refused (not started from this session, the
+ * cursor in a text field, this session off screen), the pane opens with its
+ * row marked and why, and a toast says so.
+ */
+async function focusSession($: EngineInterface, id: string, name: string, optionHide: readonly string[], paneTimes: typeof PANE_TIMES): Promise<void> {
+  let reason: string
+  try {
+    const r = await $.mcp.call(WINDOW_SERVER, 'open_session_in', { session_id: id, target: 'focus' })
+    const text = mcpText(r).trim()
+    if (!r.isError && !/^\s*refused\b/i.test(text)) {
+      await update($, focusMiss, m => (m?.id === id ? null : m))
+      return
+    }
+    reason = shortReason(text || 'the app refused')
+  } catch (err) {
+    reason = shortReason(err instanceof Error ? err.message : String(err))
+  }
+  const at = await $.clock.now()
+  await update($, focusMiss, () => ({ id, reason, at }))
+  // Its row may be folded away: open the group it is in.
+  const g = paneGroups(await visibleCrew($, optionHide), at, paneTimes)
+  if (g.sleeping.some(s => s.id === id)) await update($, panel, v => ({ ...v, isSleepingShown: true }))
+  if (g.finished.some(s => s.id === id)) await update($, panel, v => ({ ...v, isDoneHidden: false }))
+  await update($, now, () => at)
+  if (!(await $.ui.panes()).some(p => p.id === PANE)) await $.ui.open({ id: PANE, title: TITLE })
+  $.ui.toast(`Couldn't switch to ${name}: ${reason}. It's marked in the crew pane.`)
+}
+
 async function togglePane($: EngineInterface): Promise<boolean> {
   if ((await $.ui.panes()).some(p => p.id === PANE)) {
     await $.ui.close({ id: PANE })
@@ -319,6 +424,9 @@ const sorted = (list: CrewSession[]): CrewSession[] =>
 
 // ---------------------------------------------------------------------------
 // Desktop drawing: one SVG per row, animated by CSS alone.
+
+// Room each pane row leaves for its Open button.
+const OPEN_W = 64
 
 
 const fit = (s: string, size: number, maxW: number): string => {
@@ -376,6 +484,8 @@ export const register: Register = (on, options) => {
     .map(p => String(p).trim())
     .filter(Boolean)
   const recentMs = Math.max(1, Number(options.recentMinutes ?? 30) || 30) * 60_000
+  const paneTimes = { ...PANE_TIMES, recentMs }
+
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -488,8 +598,8 @@ export const register: Register = (on, options) => {
       void (async () => {
         const at = await $.clock.now()
         const shownAt = await read($, now)
-        const groups = paneGroups(await visibleCrew($, optionHide), shownAt, { needsMs: STRIP_TIMES.needsMs, recentMs })
-        const due = nextPaneChange(groups, shownAt, (await read($, panel)).isSleepingShown === true, { needsMs: STRIP_TIMES.needsMs, recentMs })
+        const groups = paneGroups(await visibleCrew($, optionHide), shownAt, paneTimes)
+        const due = nextPaneChange(groups, shownAt, (await read($, panel)).isSleepingShown === true, paneTimes)
         const spins = paneLog.surface !== undefined && paneLog.surface !== 'desktop' && groups.main.some(r => r.kind === 'working')
         if (!spins && (due === null || at < due)) return
         if (!(await $.ui.panes()).some(p => p.id === PANE)) return
@@ -519,7 +629,7 @@ export const register: Register = (on, options) => {
         if (!(await read($, poll)).isAvailable) $.clock.after(10_000, () => void refresh($))
       })()
     })
-    showStatus($, await read($, crew))
+    showStatus($, await read($, crew), await $.clock.now())
     return started
   })
 
@@ -574,7 +684,7 @@ export const register: Register = (on, options) => {
     if (sub === 'refresh') return { text: await refresh($) }
     if (sub === 'clear') {
       await update($, crew, l => l.filter(s => s.status !== 'done' && s.status !== 'dismissed'))
-      showStatus($, await read($, crew))
+      showStatus($, await read($, crew), await $.clock.now())
       return { text: 'Cleared finished sessions from the crew.' }
     }
     if (sub === 'sleeping') {
@@ -728,6 +838,7 @@ export const register: Register = (on, options) => {
         const at = await $.clock.now()
         await update($, lastPromptAt, () => at)
         await update($, bandNow, () => at)
+        await update($, focusMiss, () => null)
       }
       // Imported sessions aren't in the linked note: refresh them with each prompt, when the mod can list sessions itself.
       if (e.door === 'prompt' && ((await read($, importing)) || (await read($, crew)).some(isLiveImport))) {
@@ -757,7 +868,7 @@ export const register: Register = (on, options) => {
     const at = Math.max(await read($, bandNow), await read($, now), ...all.map(s => s.changedAt), 0)
     const items = stripItems(shownCrew, at, await read($, lastPromptAt))
     // Sleeping sessions are only a count in the summary.
-    const sleepingCount = paneGroups(shownCrew, at, { needsMs: STRIP_TIMES.needsMs, recentMs }).sleeping.length
+    const sleepingCount = paneGroups(shownCrew, at, paneTimes).sleeping.length
     if (!items.length && !sleepingCount) return next(e)
     const below = await next(e)
     bandLog.below = JSON.stringify(below).slice(0, 160)
@@ -785,15 +896,30 @@ export const register: Register = (on, options) => {
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
       const W = Math.max(200, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 16))
-      const { band, summary, shown } = layoutStrip(W, items, i => cardOf(i, label(i.session), costumeOf.get(i.session.id) ?? 'other', at, stripScale), stripScale, isNarrow =>
+      const { summary, cards, more } = layoutStrip(W, items, i => cardOf(i, label(i.session), costumeOf.get(i.session.id) ?? 'other', at, stripScale), stripScale, isNarrow =>
         stripSummary(items, isNarrow, sleepingCount),
       )
-      bandLog.drew = shown
-      const alt = items.map(i => `${label(i.session)}: ${pillText(i, at)}`).join(', ')
+      bandLog.drew = cards.length
+      // A card per session: its crab, and beside it its label (a button: it shows the session in the
+      // main pane) over its status pill. Svg takes no press, and a Button holds only text.
       return (
         <Box flexDirection="column">
           <Box key="session-crew-strip" flexDirection="row" alignItems="center" gap={1}>
-            <Svg source={band.source} alt={alt} width={band.width} height={band.height} isInteractive />
+            {cards.map(c => {
+              const s = c.item.session
+              const crabImg = cardCrabSvg(c, stripScale)
+              const pill = cardPillSvg(c)
+              return (
+                <Box key={`card:${s.id}`} flexDirection="row" alignItems="center">
+                  <Svg source={crabImg.source} alt={`${c.label}: ${pillText(c.item, at)}`} width={crabImg.width} height={crabImg.height} isInteractive />
+                  <Box flexDirection="column" alignItems="flex-start">
+                    <Button key={`open:${s.id}`} label={c.label} plain onPress={() => void focusSession($, s.id, c.label, optionHide, paneTimes)} />
+                    <Svg source={pill.source} alt={c.pill} width={pill.width} height={pill.height} isInteractive />
+                  </Box>
+                </Box>
+              )
+            })}
+            {more > 0 && <Text dimColor>+{more} more</Text>}
             <Button key="session-crew-open" label={summary} plain onPress={() => void togglePane($)} />
           </Box>
           {below}
@@ -818,7 +944,7 @@ export const register: Register = (on, options) => {
             <Text key={i.session.id} wrap="truncate-end">
               <Text color={COSTUME_COLOR[costumeOf.get(i.session.id) ?? 'other']}>▣</Text> <Text bold={i.pose !== 'finished'} dimColor={i.pose === 'finished'}>{label(i.session)}</Text>{' '}
               <Text color={PILL_COLOR[i.pose]} bold={i.pose === 'needs'} inverse={i.pose === 'needs'}>
-                {i.pose === 'working' ? frame(i.session, at) : i.pose === 'needs' ? ' !' : i.pose === 'idle' ? 'z' : '✓'} {pillText(i, at)}{i.pose === 'needs' ? ' ' : ''}
+                {i.pose === 'working' ? frame(i.session, at) : i.pose === 'needs' ? ' !' : i.pose === 'stalled' ? '◷' : i.pose === 'idle' ? '○' : '✓'} {pillText(i, at)}{i.pose === 'needs' ? ' ' : ''}
               </Text>
             </Text>
           ))}
@@ -847,9 +973,17 @@ export const register: Register = (on, options) => {
     const costume = (s: CrewSession) => costumeOf.get(s.id) ?? 'other'
     const labelOf = assignLabels(all, await labelRulesNow($, labelRules), await read($, written))
     const label = (s: CrewSession) => labelOf.get(s.id) ?? s.name
-    const { main, sleeping, finished } = paneGroups(shownCrew, at, { needsMs: STRIP_TIMES.needsMs, recentMs })
+    const { main, sleeping, finished } = paneGroups(shownCrew, at, paneTimes)
     const isSleepingShown = p.isSleepingShown === true
     const isFinishedShown = p.isDoneHidden === false
+    // A press that could not switch to its session: that row is marked, and the reason said above the list.
+    const miss = await read($, focusMiss)
+    const missed = miss ? all.find(s => s.id === miss.id) : undefined
+    const missNote = missed ? (
+      <Text key="miss" color="#D85A30">
+        Couldn't switch to {label(missed)}: {miss?.reason}. It's marked below.
+      </Text>
+    ) : null
 
     const sleepToggle =
       sleeping.length > 0 ? (
@@ -901,41 +1035,66 @@ export const register: Register = (on, options) => {
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
       const W = Math.max(240, Math.min(900, (e.props.bodyColumns || 40) * 8 - 8))
+      // Each row's own button beside it: the app shows that session in the main pane.
+      const RW = W - OPEN_W
+      const row = (s: CrewSession, img: JSX.Element) => (
+        <Box key={`row:${s.id}`} flexDirection="row" alignItems="center" gap={1}>
+          {img}
+          <Button key={`open:${s.id}`} label="Open" plain dimColor onPress={() => void focusSession($, s.id, label(s), optionHide, paneTimes)} />
+        </Box>
+      )
       return (
         <Box flexDirection="column">
+          {missNote}
           {isEmpty && empty}
           {quiet}
           {main.length > 0 && p.isCompact && (
             <Svg key="strip" source={stripSvg(W, main.map(r => r.session), costumeOf)} alt={main.map(r => `${label(r.session)} ${paneRowText(r, at)}`).join(', ')} width={W} height={40} />
           )}
           {!p.isCompact &&
-            main.map(r => (
-              <Svg
-                key={r.session.id}
-                source={mainRowSvg(W, r, label(r.session), costume(r.session), at)}
-                alt={`${label(r.session)}, the ${WEARS[costume(r.session)]} crab: ${paneRowText(r, at)}`}
-                width={W}
-                height={MAIN_ROW_H}
-                isInteractive
-              />
-            ))}
+            main.map(r =>
+              row(
+                r.session,
+                <Svg
+                  key={r.session.id}
+                  source={mainRowSvg(RW, r, label(r.session), costume(r.session), at, missed?.id === r.session.id)}
+                  alt={`${label(r.session)}, the ${WEARS[costume(r.session)]} crab: ${paneRowText(r, at)}`}
+                  width={RW}
+                  height={MAIN_ROW_H}
+                  isInteractive
+                />,
+              ),
+            )}
           {sleepToggle}
           {isSleepingShown &&
-            sleeping.map(s => (
-              <Svg key={s.id} source={sleepRowSvg(W, s, label(s), costume(s), at)} alt={`${label(s)}: idle ${fmtAgo(at - s.changedAt)}`} width={W} height={SLEEP_ROW_H} isInteractive />
-            ))}
+            sleeping.map(s =>
+              row(
+                s,
+                <Svg
+                  key={s.id}
+                  source={sleepRowSvg(RW, s, label(s), costume(s), at, undefined, missed?.id === s.id)}
+                  alt={`${label(s)}: idle ${fmtAgo(at - s.changedAt)}`}
+                  width={RW}
+                  height={SLEEP_ROW_H}
+                  isInteractive
+                />,
+              ),
+            )}
           {finishedToggle}
           {isFinishedShown &&
-            finished.map(s => (
-              <Svg
-                key={s.id}
-                source={sleepRowSvg(W, s, label(s), costume(s), at, finishedText(s))}
-                alt={`${label(s)}: ${finishedText(s)}`}
-                width={W}
-                height={SLEEP_ROW_H}
-                isInteractive
-              />
-            ))}
+            finished.map(s =>
+              row(
+                s,
+                <Svg
+                  key={s.id}
+                  source={sleepRowSvg(RW, s, label(s), costume(s), at, finishedText(s), missed?.id === s.id)}
+                  alt={`${label(s)}: ${finishedText(s)}`}
+                  width={RW}
+                  height={SLEEP_ROW_H}
+                  isInteractive
+                />,
+              ),
+            )}
           {!isEmpty && controls}
           {pollNote}
         </Box>
@@ -943,15 +1102,16 @@ export const register: Register = (on, options) => {
     }
 
     // Terminal and the other surfaces: the same rows in text; sleeping ones on one line.
-    const KIND_COLOR: Record<PaneKind, string> = { needs: '#D85A30', working: '#378ADD', proposed: '#BA7517', done: '#3B9C5F' }
+    const KIND_COLOR: Record<PaneKind, string> = { needs: '#D85A30', stalled: '#BA7517', working: '#378ADD', idle: '#8a8a86', proposed: '#BA7517', done: '#3B9C5F' }
+    const KIND_GLYPH: Record<PaneKind, string> = { needs: '!', stalled: '◷', working: '', idle: '○', proposed: '?', done: '✓' }
     const mainRow = (r: PaneRow) => {
       const s = r.session
-      const sub = [s.title && s.title !== label(s) ? s.title : '', r.kind !== 'done' ? prOf(s) ?? '' : ''].filter(Boolean).join(' · ')
+      const sub = paneSubText(r, label(s))
       return (
         <Box key={s.id} flexDirection="column" marginBottom={1}>
           <Box flexDirection="row" gap={1}>
             <Text color={COSTUME_COLOR[costume(s)]}>▣</Text>
-            <Text dimColor>{r.kind === 'working' ? frame(s, at) : r.kind === 'needs' ? '!' : r.kind === 'done' ? '✓' : '?'}</Text>
+            <Text dimColor>{r.kind === 'working' ? frame(s, at) : KIND_GLYPH[r.kind]}</Text>
             <Text bold wrap="truncate-end">
               {label(s)}
             </Text>
@@ -977,6 +1137,7 @@ export const register: Register = (on, options) => {
     )
     return (
       <Box flexDirection="column">
+        {missNote}
         {isEmpty && empty}
         {quiet}
         {p.isCompact ? (

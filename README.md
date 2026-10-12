@@ -13,22 +13,25 @@ Early-access mod API; built and tested on Claude Code 2.1.295 (desktop) and 2.1.
 
 `/crew` toggles a pane of the sessions linked to this one (and any imported). It stays calm by default:
 
-- **The main list**: sessions **working**, ones that **need you** (went idle in the last 15 minutes) and ones that
-  **finished recently** (in the last `recentMinutes`, default 30), each on two lines: the crab and the label, under it
-  the title and PR, and a status pill on the right ("working · 12m", "needs you · 3m", "done · PR #226").
+- **The main list**: sessions **working**; ones that **need you** (the turn ended asking you something) or are
+  **stalled** (it ended promising to check back later) in the last hour; ones **idle** after a turn that ended with a
+  report, in the last 15 minutes; and ones that **finished recently** (in the last `recentMinutes`, default 30). Each is
+  on two lines: the crab and the label, under it what it asked, what it promised, or the title and PR, and a status pill
+  on the right ("working · 12m", "needs you · 3m", "stalled · 3m", "idle · 3m", "done · PR #226").
 - **"13 sleeping · show"**: every other idle session, folded into one row; opened, each is one compact line
   (crab, label, "idle 8m"). `/crew sleeping show|hide` sets it, and it's remembered.
 - **"5 finished · show"**: older finished sessions, folded, one line each ("done · PR #199").
 - **Never shown**: archived sessions, and any session a hide rule matches (`/crew hide`, the `hidePatterns` option).
 
-Hover a row for the whole title, the session's handle and the app's note ("started by …"). Each row shows:
+Hover a row for the whole title, the session's handle and the app's note ("started by …"). Each row's **Open**
+button shows that session in the app's main pane (see "Opening a session" below). Each row shows:
 
 | | |
 | --- | --- |
 | crab | its costume from your `faces` rules or `/crew face`, else the next one in turn (kept for the session's life) |
 | label | a short human label (see Labels below), not the app's handle |
 | title, PR | on a main row's second line: the title when it says more than the label, and the PR |
-| status | the pill: working, needs you, proposed, done (with its PR) |
+| status | the pill: working, needs you, stalled, idle, proposed, done (with its PR) |
 
 Buttons under the rows: **Crabs only** (the main list as a strip of crabs) and **Refresh**. The status line also
 carries `crew: 2 working · 1 sleeping`.
@@ -41,14 +44,35 @@ colour is never the only cue:
 
 | pill | when |
 | --- | --- |
-| **`! needs you`** (solid) | went idle in the last 15 minutes: its turn ended and it waits on you |
+| **`! needs you`** (solid) | its last turn, in the past hour, ended asking you something (see below) |
+| `◷ stalled` | its last turn, in the past hour, ended promising to check back later ("I'll check in about 2 minutes"): nothing will wake it to, so message it |
 | `● working 12m` | working, for that long |
+| `○ idle` | its last turn, in the past 15 minutes, ended with a report or a statement (or how it ended isn't known yet) |
 | `✓ done` / `✓ done · PR #226` | finished while you watched: celebrates for 5 s, then goes muted (still readable) and stays until your next prompt, at least a minute |
 
-Order: needs you, working, done. Sleeping sessions never draw a crab here; the summary counts them, and when
-everyone is asleep the strip is just that count ("13 sessions · 13 sleeping"), which opens the pane. With more than six, the needs-you and working cards show and the rest are
-`+N more`. Beside the cards, **"4 sessions · 2 working · 1 needs you · 1 done · 13 sleeping"** (just `● 2  ! 1  ✓ 1  z 13` when narrow)
-opens the pane. Hover a card for the session's full title and status.
+Order: needs you, stalled, working, idle, done.
+
+**How a turn ended** is read from the session's last message: the app's "finished a turn. It reported: …" note for
+sessions this one started, or, when that note was cut short (the app quotes about 400 characters) or there was none (a
+poll or an import saw it go idle), the session's transcript through `list_events`, once per idle spell. It **asks** when
+any sentence ends in "?" or hands you the next move: "want me to", "should I", "would you like", "your call", "which
+option", "let me know", "please confirm", "once you approve", "needs your go-ahead", "decisions needed". Else it is a
+**promise** when its closing lines say it will check back by itself ("I'll check in about 2½ minutes", "will verify
+after the restart", "I'll deploy when the build finishes"). Anything else is a **report**. The app doesn't tell a mod
+about pending permission prompts, so those don't count. Hover a card for the question or promise it read. Sleeping sessions never draw a crab here; the summary counts them, and when
+everyone is asleep the strip is just that count ("13 sessions · 13 sleeping"), which opens the pane. With more than six, the needs-you, stalled and working cards show and the rest
+are `+N more`. Beside the cards, **"5 sessions · 2 working · 1 needs you · 1 stalled · 1 done · 13 sleeping"** (just
+`● 2  ! 1  ◷ 1  ✓ 1  z 13` when narrow; `○` counts idle) opens the pane. Hover a card for the session's full title and status.
+
+### Opening a session
+
+In the desktop app, a card's label (the button beside its crab) and a pane row's **Open** button show that session in the
+main pane, as clicking its sidebar row does, through the app's `open_session_in` (`ccd_window`, target `focus`). The
+mod API has no press on an `Svg` and a `Button` holds only text, so the crab picture itself isn't the click target; its
+label beside it is. The app only does this for sessions this one started, and not while the cursor is in a text field
+or this session is off screen. When it refuses, the pane opens with that row tinted and the reason above the list, and
+a toast says so; the mark clears on your next prompt. The terminal can't switch sessions, so there the cards and rows
+are as before.
 
 **Labels** come from, in order: a `labels` rule or `/crew label`; else a 1–3 word label a small model (Haiku, low
 effort) writes from the title, once per session and kept across sessions (`aiLabels: false` turns that off); else
@@ -204,6 +228,10 @@ The resting and cheering poses are new here.
 claude plugin validate ~/dev/session-crew
 claude plugin test ~/dev/session-crew
 ```
+
+The tests need the test kit of 2.1.295 or later (older kits have no `mock.session`, which the `session.append` tests
+use). If the terminal's `claude` is older, run the desktop app's own CLI:
+`"$HOME/Library/Application Support/Claude/claude-code/2.1.295/<build>/claude.app/Contents/MacOS/claude" plugin test ~/dev/session-crew`.
 
 `hooks/parse.ts` holds the parsing, merging and costume logic as pure functions; `hooks/crab.ts`
 the crab art; `hooks/register.tsx` the hooks and drawing; `types/index.d.ts` the `$.state` contract.

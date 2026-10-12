@@ -1,7 +1,7 @@
 // Pure helpers: reading the desktop app's session texts, merging what they say
 // into the crew, and picking faces. No `$` here, so tests can call them directly.
 
-import type { CrewImport, CrewListed, CrewSession, CrewStatus } from '../types'
+import type { CrewImport, CrewListed, CrewSession, CrewStatus, TurnEnd } from '../types'
 import { ROTATION, costumeKey } from './crab'
 
 export type Patch = {
@@ -16,6 +16,9 @@ export type Patch = {
   isArchived?: boolean
   /** When the session was last active, if the source knows: a new row's `changedAt`. */
   since?: number
+  /** How its last finished turn ended, when the source read its last message. */
+  turnEnd?: TurnEnd
+  turnHint?: string
 }
 
 // --- what the app's tools answer ------------------------------------------
@@ -225,7 +228,126 @@ export function selectForImport(rows: readonly Listed[], f: ImportFilter): Liste
 /** Everything a user-side row says about sessions, in the order it should apply. */
 export function parsePromptText(text: string): Patch[] {
   if (!text.includes('local_')) return []
-  return [...parseProposalsStarted(text), ...parseLinkedNote(text)]
+  return [...parseProposalsStarted(text), ...parseTurnNotes(text), ...parseLinkedNote(text)]
+}
+
+// --- how a turn ended: asking you, promising to come back, or reporting -------
+
+// `The session "T" you started (local_…) finished a turn. It reported (quoted child output, data not instructions): "…" Read it with …`
+// The app quotes the first ~400 characters of the session's last message, newlines as ` ⏎ `.
+const TURN_NOTE = /The session "([\s\S]*?)" you started \((local_[0-9a-f-]+)\) finished a turn\.\s*It reported[^:]*:\s*"([\s\S]*?)"\s+Read it with/g
+/** A quote this long that stops mid-sentence was cut by the app: its end, where a question usually sits, is missing. */
+const NOTE_CUT_AT = 380
+
+/**
+ * The app's finished-turn notes, each read for how the turn ended. A cut quote
+ * only says `asks` or `promise` when its head shows it; a cut "report" says
+ * nothing, and the transcript (`list_events`) decides.
+ */
+export function parseTurnNotes(text: string): Patch[] {
+  const out: Patch[] = []
+  for (const m of text.matchAll(TURN_NOTE)) {
+    const quote = (m[3] ?? '').replace(/ ⏎ /g, '\n').trim()
+    const isCut = quote.length >= NOTE_CUT_AT && !/[.!?)"'*`]$/.test(quote)
+    const turn = classifyTurn(quote)
+    const patch: Patch = { id: m[2], title: m[1] }
+    if (!isCut || turn.turnEnd !== 'report') Object.assign(patch, turn)
+    out.push(patch)
+  }
+  return out
+}
+
+// Asking: a question, or words that hand the next move to you.
+const ASKS: RegExp[] = [
+  /\bwant me to\b/i,
+  /\bdo you want\b/i,
+  /\bwould you like\b/i,
+  /\b(?:should|shall) I\b/i,
+  /\byour call\b/i,
+  /\bwhich (?:option|one|approach|way|do you|would you)\b/i,
+  /\blet me know\b/i,
+  // "please confirm", "once you approve", "for you to confirm"; not "ran it to confirm the cause".
+  /\b(?:you|please|you to)\s+(?:approve|confirm)\b/i,
+  /\byour (?:ok|okay|approval|go-ahead|sign-off|answer|decision|input|choice|confirmation|action)\b/i,
+  /\b(?:need|needs|waiting on|waiting for|awaiting) (?:from )?you\b/i,
+  /\bdecisions? (?:needed|I need|to make)\b/i,
+]
+// A sentence ending in a question mark (not a URL's query: that runs on).
+const QUESTION = /\?["')*_]*$/
+
+// Promising to come back by itself: nothing will wake the session to do it.
+const LATER = String.raw`(?:in (?:about |around |roughly |~)?(?:[\d½¼¾]|an? |a few|a couple)|(?:about|around|roughly|~) ?[\d½¼¾]+ ?(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|s|m|h)\b|from now|after|once|when|later|shortly|again|tomorrow)`
+// What the session waits on, finishing: "when the build finishes", "once it reports back".
+const DONE = String.raw`(?:finish(?:es|ed)?|completes?|ends|is done|reports? back|is ready|comes? back|loads|restarts)`
+const PROMISES: RegExp[] = [
+  new RegExp(
+    String.raw`\b(?:I'll|I will|I'm going to|I am going to)\s+(?:then\s+)?(?:check|look|report|verify|come back|circle back|follow up|confirm|re-?check|re-?run|re-?try|retry|poll|ping|update you|let you know|see)\b[^.!?\n]*?` + LATER,
+    'i',
+  ),
+  new RegExp(String.raw`\bwill (?:verify|check|report|confirm|re-?check|follow up)\b[^.!?\n]*?` + LATER, 'i'),
+  // "I'll deploy when the build finishes", "Once it accepts connections, I'll update it".
+  new RegExp(String.raw`\bI(?:'ll| will)\b[^.!?\n]*\b(?:when|once|after|as soon as)\b[^.!?\n]*\b` + DONE + String.raw`\b`, 'i'),
+  /^(?:once|when|after|as soon as)\b[^.!?\n]*,\s*I(?:'ll| will)\b/i,
+  /\bcheck(?:ing)? back\b/i,
+  /\bcheck in (?:about|around|in|after|again|later|once)\b/i,
+]
+
+const clipHint = (t: string): string => (t.length > 160 ? t.slice(0, 159).trimEnd() + '…' : t)
+
+/**
+ * How a last message ends a turn: `asks` when it asks you anything (a
+ * sentence ending in "?", "want me to", "should I", "approve", "your call",
+ * "which option", "let me know", "confirm"…), else `promise` when its closing
+ * lines say it will check back later (nothing will wake it to), else `report`.
+ * `turnHint` is the sentence that decided it.
+ */
+export function classifyTurn(text: string): { turnEnd: TurnEnd; turnHint?: string } {
+  const plain = text
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`\n]*`/g, 'code')
+  const sentences = plain
+    .replace(/([.!?]["')*_]*)[ \t]+/g, '$1\n')
+    .split(/\n+/)
+    .map(x => x.replace(/^[\s>*_#-]+|[\s*_]+$/g, '').trim())
+    .filter(Boolean)
+  // A table's cells ("| Ready?") ask nothing.
+  const asked = [...sentences].reverse().find(x => (QUESTION.test(x) && !x.includes('|')) || ASKS.some(re => re.test(x)))
+  if (asked) return { turnEnd: 'asks', turnHint: clipHint(asked) }
+  // Only the closing lines: a plan earlier in a report may say "I'll check once…".
+  const paras = plain.split(/\n\s*\n/).map(x => x.trim()).filter(Boolean)
+  const tail = paras.slice(-2).join('\n')
+  const promised = sentences.filter(x => tail.includes(x)).reverse().find(x => PROMISES.some(re => re.test(x)))
+  if (promised) return { turnEnd: 'promise', turnHint: clipHint(promised) }
+  return { turnEnd: 'report' }
+}
+
+// list_events: `[assistant] text…` blocks, each starting a line, with `[result] …`, `[user] …` and tool rows between.
+const EVENT_MARK = /^\[(assistant|user|result|tool[\w ]*|system|thinking|summary|error)\](?: |$)/
+
+/** The last `[assistant]` message in a list_events transcript, or null. */
+export function lastAssistantText(transcript: string): string | null {
+  let last: string[] | null = null
+  let cur: string[] | null = null
+  for (const line of transcript.split('\n')) {
+    const m = EVENT_MARK.exec(line)
+    if (m) {
+      cur = m[1] === 'assistant' ? [line.slice(m[0].length)] : null
+      if (cur) last = cur
+    } else if (cur) cur.push(line)
+  }
+  const text = last?.join('\n').trim()
+  return text ? text : null
+}
+
+/** How the session's current idle spell began, if known: a reading older than its last change says nothing. */
+export const turnOf = (s: CrewSession): TurnEnd | undefined =>
+  s.turnEnd !== undefined && (s.turnEndAt ?? -Infinity) >= s.changedAt ? s.turnEnd : undefined
+
+/** An idle session's place: it asks you (needs), promised to check back (stalled), or reported (idle). */
+export const idlePose = (s: CrewSession): 'needs' | 'stalled' | 'idle' => {
+  const t = turnOf(s)
+  return t === 'asks' ? 'needs' : t === 'promise' ? 'stalled' : 'idle'
 }
 
 // --- merging ---------------------------------------------------------------
@@ -288,6 +410,7 @@ export function upsert(input: CrewSession[], p: Patch, at: number, source: strin
       source,
       ...(p.isImported ? { isImported: true as const } : {}),
       ...(p.isArchived ? { isArchived: true as const } : {}),
+      ...(p.turnEnd ? { turnEnd: p.turnEnd, turnEndAt: at, ...(p.turnHint ? { turnHint: p.turnHint } : {}) } : {}),
       slot: list.reduce((m, r) => Math.max(m, (r.slot ?? -1) + 1), 0),
     }
     return [...list, row].slice(-100)
@@ -322,6 +445,12 @@ export function upsert(input: CrewSession[], p: Patch, at: number, source: strin
   // A proposal that became a session runs from when it started.
   if (prev.status === 'proposed' && status === 'working') next.startedAt = at
   if (p.isArchived === false) delete next.isArchived
+  if (p.turnEnd) {
+    next.turnEnd = p.turnEnd
+    next.turnEndAt = at
+    if (p.turnHint) next.turnHint = p.turnHint
+    else delete next.turnHint
+  }
   return list.map((s, i) => (i === idx ? next : s))
 }
 
@@ -520,38 +649,44 @@ export function parseLabels(text: string, asked: readonly string[]): Record<stri
 
 // --- the strip above the prompt ------------------------------------------------
 
-export type StripPose = 'needs' | 'working' | 'idle' | 'done' | 'finished'
+export type StripPose = 'needs' | 'stalled' | 'working' | 'idle' | 'done' | 'finished'
 export type StripItem = { session: CrewSession; pose: StripPose }
 
 export const STRIP_TIMES = {
-  /** A session that went idle this recently needs you. */
-  needsMs: 15 * 60_000,
-  /** After that it is plain idle in the strip, until this long after it went idle. */
-  idleMs: 60 * 60_000,
+  /** A session whose turn ended asking you (needs you), or promising to check back (stalled), shows this long. */
+  needsMs: 60 * 60_000,
+  /** One whose turn ended with a report (or whose ending isn't known yet) shows as idle this long. */
+  idleMs: 15 * 60_000,
   /** A finished session celebrates this long, then goes muted. */
   celebrateMs: 5_000,
   /** And stays at least this long, then until your next prompt. */
   holdMs: 60_000,
 }
 
-const POSE_ORDER: StripPose[] = ['needs', 'working', 'idle', 'done', 'finished']
+const POSE_ORDER: StripPose[] = ['needs', 'stalled', 'working', 'idle', 'done', 'finished']
+
+/** How long an idle session stays out of sleep, by how its turn ended. */
+const idleWindow = (pose: 'needs' | 'stalled' | 'idle', t: { needsMs: number; idleMs: number }): number => (pose === 'idle' ? t.idleMs : t.needsMs)
 
 /**
- * Who the strip shows, needs-you first, then working, idle and done: every
- * working session; ones that went idle in the last 15 minutes (needs you) or
- * hour (idle); and ones that finished while this crew watched, until your next
- * prompt but at least a minute. Idle and done need a change this crew saw
- * (`changeSeenAt`): a row first seen already idle or done (an import, the
- * app's note at start) shows only in the pane.
+ * Who the strip shows, needs-you first, then stalled, working, idle and done:
+ * every working session; idle ones by how their last turn ended (idlePose):
+ * asking you (needs you) or promising to check back (stalled) for an hour, a
+ * report for 15 minutes; and ones that finished while this crew watched,
+ * until your next prompt but at least a minute. Idle and done need a change
+ * this crew saw (`changeSeenAt`): a row first seen already idle or done (an
+ * import, the app's note at start) shows only in the pane.
  */
 export function stripItems(crew: readonly CrewSession[], at: number, lastPromptAt: number, t = STRIP_TIMES): StripItem[] {
   const out: StripItem[] = []
   for (const s of crew) {
     if (s.status === 'working') out.push({ session: s, pose: 'working' })
     else if (s.changeSeenAt === undefined) continue
-    // Sleeping sessions never draw in the strip (the summary counts them): only one that needs you.
-    else if (s.status === 'idle' && at - s.changedAt < t.needsMs) out.push({ session: s, pose: 'needs' })
-    else if (s.status === 'done' && s.endedAt !== undefined && !isArchivedRow(s)) {
+    // Sleeping sessions never draw in the strip (the summary counts them): only recent turn ends.
+    else if (s.status === 'idle') {
+      const pose = idlePose(s)
+      if (at - s.changedAt < idleWindow(pose, t)) out.push({ session: s, pose })
+    } else if (s.status === 'done' && s.endedAt !== undefined && !isArchivedRow(s)) {
       const age = at - s.endedAt
       if (age < t.holdMs || s.endedAt > lastPromptAt) out.push({ session: s, pose: age < t.celebrateMs ? 'done' : 'finished' })
     }
@@ -564,7 +699,7 @@ export function stripItems(crew: readonly CrewSession[], at: number, lastPromptA
  * working ones (as many as `fit`), the rest counted; else the first `fit`.
  */
 export function stripShown(items: readonly StripItem[], fit: number, max = 6, least = 1): { shown: StripItem[]; more: number } {
-  const pool = items.length > max ? items.filter(i => i.pose === 'needs' || i.pose === 'working') : [...items]
+  const pool = items.length > max ? items.filter(i => i.pose === 'needs' || i.pose === 'stalled' || i.pose === 'working') : [...items]
   const shown = pool.slice(0, Math.max(least, fit))
   return { shown, more: items.length - shown.length }
 }
@@ -579,22 +714,24 @@ const workingDue = (since: number, at: number): number => {
   return since + (Math.floor(age / step) + 1) * step
 }
 
-/** The pill's words: "working 12m", "needs you", "idle", "done ✓" or "done · PR #226". */
+/** The pill's words: "working 12m", "needs you", "stalled", "idle", "done ✓" or "done · PR #226". */
 export function pillText(i: StripItem, at: number): string {
   if (i.pose === 'working') return `working ${workingFor(at - i.session.changedAt)}`
   if (i.pose === 'needs') return 'needs you'
+  if (i.pose === 'stalled') return 'stalled'
   if (i.pose === 'idle') return 'idle'
   const pr = /PR #\d+/.exec(i.session.note ?? '')?.[0]
   return pr ? `done · ${pr}` : 'done ✓'
 }
 
-/** "4 sessions · 2 working · 1 needs you · 1 done · 13 sleeping", or the counts alone. */
+/** "5 sessions · 2 working · 1 needs you · 1 stalled · 1 done · 13 sleeping", or the counts alone. */
 export function stripSummary(items: readonly StripItem[], isNarrow: boolean, sleeping = 0): string {
   const n = (...p: StripPose[]) => items.filter(i => p.includes(i.pose)).length
   const parts: [number, string, string][] = [
     [n('working'), 'working', '●'],
     [n('needs'), 'needs you', '!'],
-    [n('idle'), 'idle', 'z'],
+    [n('stalled'), 'stalled', '◷'],
+    [n('idle'), 'idle', '○'],
     [n('done', 'finished'), 'done', '✓'],
     [sleeping, 'sleeping', 'z'],
   ]
@@ -612,7 +749,7 @@ export function nextStripChange(items: readonly StripItem[], at: number, t = STR
     const due =
       pose === 'done' ? ended + t.celebrateMs
       : pose === 'finished' ? ended + t.holdMs
-      : pose === 'needs' ? s.changedAt + t.needsMs
+      : pose === 'needs' || pose === 'stalled' ? s.changedAt + t.needsMs
       : pose === 'idle' ? s.changedAt + t.idleMs
       : pose === 'working' ? workingDue(s.changedAt, at)
       : null
@@ -631,21 +768,25 @@ export function isHiddenBy(s: CrewSession, patterns: readonly string[]): boolean
   })
 }
 
-export type PaneKind = 'needs' | 'working' | 'proposed' | 'done'
+export type PaneKind = 'needs' | 'stalled' | 'working' | 'idle' | 'proposed' | 'done'
 export type PaneRow = { session: CrewSession; kind: PaneKind }
 
 export const PANE_TIMES = {
-  /** A session that went idle this recently needs you (as in the strip). */
+  /** An idle session whose turn asked you, or promised to check back, stays in the main list this long (as in the strip). */
   needsMs: STRIP_TIMES.needsMs,
+  /** One whose turn ended with a report stays this long. */
+  idleMs: STRIP_TIMES.idleMs,
   /** A session that finished this recently stays in the main list (the `recentMinutes` option). */
   recentMs: 30 * 60_000,
 }
 
-const KIND_ORDER: PaneKind[] = ['needs', 'working', 'proposed', 'done']
+const KIND_ORDER: PaneKind[] = ['needs', 'stalled', 'working', 'idle', 'proposed', 'done']
 
 /**
- * The pane's groups. Main: working, needs you (went idle in the last 15
- * minutes), proposed, and finished recently (`recentMs`), in that order.
+ * The pane's groups. Main: needs you and stalled (the turn asked you, or
+ * promised to check back, in the last hour), working, idle (a turn that ended
+ * with a report in the last 15 minutes), proposed, and finished recently
+ * (`recentMs`), in that order.
  * Sleeping: every other idle session, newest first, folded by default.
  * Finished: older finished and dismissed ones, folded. Archived sessions are
  * in none. "Needs you" and "finished recently" need a change this crew saw:
@@ -665,7 +806,8 @@ export function paneGroups(
     if (s.status === 'working') main.push({ session: s, kind: 'working' })
     else if (s.status === 'proposed') main.push({ session: s, kind: 'proposed' })
     else if (s.status === 'idle') {
-      if (seen && at - s.changedAt < t.needsMs) main.push({ session: s, kind: 'needs' })
+      const pose = idlePose(s)
+      if (seen && at - s.changedAt < idleWindow(pose, t)) main.push({ session: s, kind: pose })
       else sleeping.push(s)
     } else if (s.status === 'done' && seen && at - (s.endedAt ?? s.changedAt) < t.recentMs) main.push({ session: s, kind: 'done' })
     else finished.push(s)
@@ -676,14 +818,28 @@ export function paneGroups(
   return { main, sleeping, finished }
 }
 
+/**
+ * A main row's second line: for a session waiting on you, what it asked; for a
+ * stalled one, what it promised and that nothing will wake it; else the title
+ * (when it says more than the label) and the PR.
+ */
+export function paneSubText(r: PaneRow, label: string): string {
+  const s = r.session
+  if (r.kind === 'needs' && s.turnHint) return `asks: ${s.turnHint}`
+  if (r.kind === 'stalled') return `nothing will wake it${s.turnHint ? `: "${s.turnHint}"` : ''}`
+  return [s.title && s.title !== label ? s.title : '', r.kind !== 'done' ? prOf(s) ?? '' : ''].filter(Boolean).join(' · ')
+}
+
 /** The PR a session's note names ("PR #226"), if any. */
 export const prOf = (s: CrewSession): string | undefined => /PR #\d+/.exec(s.note ?? '')?.[0]
 
-/** A main row's words on the right: "working · 12m", "needs you · 3m", "proposed", "done · PR #226" or "done · 4m ago". */
+/** A main row's words on the right: "working · 12m", "needs you · 3m", "stalled · 3m", "idle · 3m", "proposed", "done · PR #226" or "done · 4m ago". */
 export function paneRowText(r: PaneRow, at: number): string {
   const s = r.session
   if (r.kind === 'working') return `working · ${workingFor(at - s.changedAt)}`
   if (r.kind === 'needs') return `needs you · ${fmtAgo(at - s.changedAt)}`
+  if (r.kind === 'stalled') return `stalled · ${fmtAgo(at - s.changedAt)}`
+  if (r.kind === 'idle') return `idle · ${fmtAgo(at - s.changedAt)}`
   if (r.kind === 'proposed') return 'proposed'
   const pr = prOf(s)
   return pr ? `done · ${pr}` : `done · ${fmtAgo(at - (s.endedAt ?? s.changedAt))} ago`
@@ -699,14 +855,15 @@ export function agoDue(since: number, at: number): number {
 /**
  * When the pane's drawing next changes by the clock alone, or null: an
  * elapsed time's words ("working · 12m", "needs you · 3m", "done · 4m ago",
- * "idle 8m" while sleeping rows show), or a row moving group (needs you →
- * sleeping, recently finished → finished).
+ * "idle 8m" while sleeping rows show), or a row moving group (needs you,
+ * stalled or idle → sleeping, recently finished → finished).
  */
 export function nextPaneChange(g: ReturnType<typeof paneGroups>, at: number, isSleepingShown: boolean, t = PANE_TIMES): number | null {
   const dues: number[] = []
   for (const { session: s, kind } of g.main) {
     if (kind === 'working') dues.push(workingDue(s.changedAt, at))
-    else if (kind === 'needs') dues.push(agoDue(s.changedAt, at), s.changedAt + t.needsMs)
+    else if (kind === 'needs' || kind === 'stalled') dues.push(agoDue(s.changedAt, at), s.changedAt + t.needsMs)
+    else if (kind === 'idle') dues.push(agoDue(s.changedAt, at), s.changedAt + t.idleMs)
     else if (kind === 'done') {
       const ended = s.endedAt ?? s.changedAt
       if (!prOf(s)) dues.push(agoDue(ended, at))
