@@ -64,11 +64,11 @@ function scopedPillCss(): string {
   return `<style>${scope(light, '.sw-l')}${scope(light, '.sw-d')}${scope(dark, '.sw-d')}${rest}</style>`
 }
 
-function outfitCard(h: Holiday, o: Holiday['outfits'][number], picks: Set<string>): HTMLElement {
-  const card = el('article', { class: 'outfit', id: `o-${o.id}` })
-  const keepId = `keep-${o.id}`
+function outfitCard(h: Holiday, o: Holiday['outfits'][number], drops: Set<string>): HTMLElement {
+  const card = el('article', { class: `outfit${drops.has(o.id) ? ' dropped' : ''}`, id: `o-${o.id}` })
+  const dropId = `drop-${o.id}`
   card.append(el('header', {}, `<h3>${esc(o.name)}</h3><code title="What a faces rule would name">${o.id}</code>
-    <label class="keep" for="${keepId}"><input type="checkbox" id="${keepId}" data-id="${o.id}" data-holiday="${h.id}"${picks.has(o.id) ? ' checked' : ''}> Keep</label>`))
+    <label class="drop" for="${dropId}"><input type="checkbox" id="${dropId}" data-id="${o.id}" data-holiday="${h.id}"${drops.has(o.id) ? ' checked' : ''}> Drop</label>`))
   card.append(el('p', { class: 'note' }, esc(o.note)))
   const zoom = el('div', { class: 'stage' })
   for (const p of POSES.slice(0, 3))
@@ -174,8 +174,8 @@ function boot(): void {
   const total = HOLIDAYS.reduce((n, h) => n + h.outfits.length, 0)
   document.getElementById('count')!.textContent = `${total} outfits across ${HOLIDAYS.length} holidays`
 
-  let picks = new Set<string>()
-  try { picks = new Set(JSON.parse(localStorage.getItem('crew-holiday-picks') ?? '[]') as string[]) } catch { /* private window */ }
+  let drops = new Set<string>()
+  try { drops = new Set(JSON.parse(localStorage.getItem('crew-holiday-drops') ?? '[]') as string[]) } catch { /* private window */ }
 
   const nav = document.getElementById('jump')!
   const gallery = document.getElementById('gallery')!
@@ -187,7 +187,7 @@ function boot(): void {
     sec.append(el('div', { class: 'hhead' }, `<h2>${esc(h.name)}</h2><p class="when">${esc(h.when)}${w ? ` · next ${fmt(w[0])} – ${fmt(w[1])} ${w[1].getFullYear()}` : ''} · ${h.outfits.length} outfits</p>`))
     sec.append(el('div', { class: 'strips' }, `<p class="caption">On the strip, at its real size</p>${stripMock(h, 'sw-l')}${stripMock(h, 'sw-d')}`))
     const grid = el('div', { class: 'grid' })
-    for (const o of h.outfits) grid.append(outfitCard(h, o, picks))
+    for (const o of h.outfits) grid.append(outfitCard(h, o, drops))
     sec.append(grid)
     gallery.append(sec)
   }
@@ -214,30 +214,32 @@ function boot(): void {
   dateIn.addEventListener('input', showDate)
   showDate()
 
-  // Picks: kept in this browser only, copied out as a list to paste back to Claude.
+  // Drops: the outfits to leave out, kept in this browser only and copied out as a list to paste back to Claude.
   const bar = document.getElementById('picks')!
   const out = document.getElementById('picks-count')!
   const summary = (): string =>
     HOLIDAYS.map(h => {
-      const kept = h.outfits.filter(o => picks.has(o.id)).map(o => o.id)
-      return kept.length ? `${h.id}: ${kept.join(', ')}` : ''
+      const out = h.outfits.filter(o => drops.has(o.id)).map(o => o.id)
+      return out.length ? `${h.id}: ${out.join(', ')}` : ''
     }).filter(Boolean).join('\n')
   const refresh = () => {
-    out.textContent = picks.size ? `${picks.size} kept` : 'Tick Keep on the outfits you like'
-    bar.classList.toggle('has', picks.size > 0)
-    try { localStorage.setItem('crew-holiday-picks', JSON.stringify([...picks])) } catch { /* not kept */ }
+    const total = HOLIDAYS.reduce((n, h) => n + h.outfits.length, 0)
+    out.textContent = drops.size ? `${drops.size} to drop, ${total - drops.size} kept` : `All ${total} kept: tick Drop on any you don't want`
+    bar.classList.toggle('has', drops.size > 0)
+    try { localStorage.setItem('crew-holiday-drops', JSON.stringify([...drops])) } catch { /* not kept */ }
   }
   gallery.addEventListener('change', e => {
     const t = e.target as HTMLInputElement
     if (!t.dataset.id) return
-    if (t.checked) picks.add(t.dataset.id)
-    else picks.delete(t.dataset.id)
+    if (t.checked) drops.add(t.dataset.id)
+    else drops.delete(t.dataset.id)
+    t.closest('.outfit')?.classList.toggle('dropped', t.checked)
     refresh()
   })
   const copy = document.getElementById('copy-picks') as HTMLButtonElement
   const text = document.getElementById('picks-text') as HTMLTextAreaElement
   copy.addEventListener('click', () => {
-    const s = `Keep these holiday outfits:\n${summary()}`
+    const s = drops.size ? `Keep every holiday outfit except these:\n${summary()}` : 'Keep every holiday outfit.'
     text.value = s
     text.hidden = false
     navigator.clipboard?.writeText(s).then(
@@ -246,8 +248,9 @@ function boot(): void {
     ) ?? text.select()
   })
   document.getElementById('clear-picks')!.addEventListener('click', () => {
-    picks.clear()
+    drops.clear()
     for (const c of gallery.querySelectorAll<HTMLInputElement>('input[data-id]')) c.checked = false
+    for (const c of gallery.querySelectorAll('.dropped')) c.classList.remove('dropped')
     text.hidden = true
     refresh()
   })

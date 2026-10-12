@@ -97,8 +97,11 @@ tbody th { font-weight: 700 }
 .outfit { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; min-width: 0 }
 .outfit header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap }
 .outfit code { color: var(--muted) }
-.keep { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; user-select: none }
-.keep input { accent-color: var(--accent); width: 16px; height: 16px }
+.drop { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; user-select: none }
+.drop input { accent-color: var(--accent); width: 16px; height: 16px }
+.outfit { transition: opacity .15s }
+.outfit.dropped { opacity: .4 }
+.outfit.dropped h3 { text-decoration: line-through }
 .note { color: var(--muted); font-size: 14px; min-height: 2.6em }
 .stage { --stage: var(--stage-theme); display: flex; justify-content: space-between; gap: 4px; background: var(--stage); border-radius: 10px; padding: 6px }
 body[data-stage="light"] .stage { --stage: var(--app-light) }
@@ -128,7 +131,7 @@ body.paused svg * { animation-play-state: paused !important }
   <header class="top">
     <p class="eyebrow">session-crew · design preview</p>
     <h1>Holiday wardrobe</h1>
-    <p class="lede">Seasonal outfits for the crew's crabs, drawn by the mod's own crab code at the strip's real size and three times larger. <b id="count"></b>. Nothing is switched on yet: tick <b>Keep</b> on the ones you like, then copy the list back to Claude.</p>
+    <p class="lede">Seasonal outfits for the crew's crabs, drawn by the mod's own crab code at the strip's real size and three times larger. <b id="count"></b>. Nothing is switched on yet. Everything is kept unless you tick <b>Drop</b>; then copy the list back to Claude.</p>
     <div class="controls">
       <span>3× stage</span>
       <span class="seg" role="group" aria-label="Background behind the large crabs">
@@ -188,6 +191,6 @@ body.paused svg * { animation-play-state: paused !important }
   <span id="picks-count" aria-live="polite"></span>
   <button type="button" class="btn primary" id="copy-picks">Copy list</button>
   <button type="button" class="btn" id="clear-picks">Clear</button>
-  <textarea id="picks-text" hidden readonly aria-label="Your kept outfits"></textarea>
+  <textarea id="picks-text" hidden readonly aria-label="Outfits to drop"></textarea>
 </div>
 <script>/*BUNDLE*/</script>
