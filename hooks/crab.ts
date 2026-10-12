@@ -11,8 +11,8 @@ import type { CrewStatus } from '../types'
 
 // Pixel Clawd from DockCrab (Clawdy): a 24×18 crab on a 30×28 grid, one costume per tier.
 // The body keeps the brand clay; the tier's color lives in the costume's accent.
-const CLAY = '#D97757'
-const INK = '#1F1E1D'
+export const CLAY = '#D97757'
+export const INK = '#1F1E1D'
 
 export const COSTUME_COLOR: Record<string, string> = {
   fable: '#7F77DD',
@@ -60,14 +60,14 @@ export const costumeKey = (name: string): string | undefined => COSTUME_NAMES[na
 
 // `cls` puts a pixel in a named group: `bd` (the default) is the body and its
 // costume, `la`/`lb` the leg pairs, anything else a prop with its own motion.
-type Fill = (x: number, y: number, w: number, h: number, c: string, cls?: string) => void
+export type Fill = (x: number, y: number, w: number, h: number, c: string, cls?: string) => void
 
-type Pose = { eyes: 'open' | 'closed' | 'happy'; isCheering: boolean }
+export type Pose = { eyes: 'open' | 'closed' | 'happy'; isCheering: boolean }
 
-const stamp = (f: Fill, x: number, y: number, rows: string[], map: Record<string, string>, cls?: string): void =>
+export const stamp = (f: Fill, x: number, y: number, rows: string[], map: Record<string, string>, cls?: string): void =>
   rows.forEach((row, dy) => [...row].forEach((ch, dx) => map[ch] && f(x + dx, y + dy, 1, 1, map[ch] ?? '', cls)))
 
-const eyes = (f: Fill, pose: Pose): void => {
+export const eyes = (f: Fill, pose: Pose): void => {
   if (pose.eyes === 'closed') {
     f(9, 13, 2, 1, INK)
     f(19, 13, 2, 1, INK)
@@ -81,17 +81,17 @@ const eyes = (f: Fill, pose: Pose): void => {
 }
 
 // `armCls` lets a raised claw travel with the prop it holds. A cheering crab
-// raises the back claw too, in `ar`, which waves.
-const crabBody = (f: Fill, pose: Pose, armFront = 0, armCls?: string): void => {
-  f(7, 10, 16, 12, CLAY)
-  if (pose.isCheering) f(3, 10, 4, 4, CLAY, 'ar')
-  else f(3, 14, 4, 4, CLAY)
-  f(23, 14 + (pose.isCheering && !armCls ? -4 : armFront), 4, 4, CLAY, armCls ?? (pose.isCheering ? 'ar' : undefined))
+// raises the back claw too, in `ar`, which waves. `skin` recolours the whole crab.
+export const crabBody = (f: Fill, pose: Pose, armFront = 0, armCls?: string, skin = CLAY): void => {
+  f(7, 10, 16, 12, skin)
+  if (pose.isCheering) f(3, 10, 4, 4, skin, 'ar')
+  else f(3, 14, 4, 4, skin)
+  f(23, 14 + (pose.isCheering && !armCls ? -4 : armFront), 4, 4, skin, armCls ?? (pose.isCheering ? 'ar' : undefined))
   eyes(f, pose)
-  f(7, 22, 2, 4, CLAY, 'la')
-  f(17, 22, 2, 4, CLAY, 'la')
-  f(11, 22, 2, 4, CLAY, 'lb')
-  f(21, 22, 2, 4, CLAY, 'lb')
+  f(7, 22, 2, 4, skin, 'la')
+  f(17, 22, 2, 4, skin, 'la')
+  f(11, 22, 2, 4, skin, 'lb')
+  f(21, 22, 2, 4, skin, 'lb')
 }
 
 // Pure CSS, run by the compositor: no redraws. Periods divide one second, so the
@@ -220,6 +220,12 @@ export const CRAB_SCALE = 1.1
  * outside it and step on their own.
  */
 export function crab(x: number, y: number, costume: string, status: CrabPose, scale = CRAB_SCALE): string {
+  const draw = COSTUMES[costume] ?? COSTUMES.other
+  return drawCrab(x, y, `c-${costume}`, (f, pose) => draw?.(f, COSTUME_COLOR[costume] ?? '#888780', pose), status, scale)
+}
+
+/** The frame every crab is drawn in: `draw` paints it, `cls` names its motion's CSS class. */
+export function drawCrab(x: number, y: number, cls: string, draw: (f: Fill, pose: Pose) => void, status: CrabPose, scale = CRAB_SCALE): string {
   const pose: Pose = {
     eyes: status === 'idle' ? 'closed' : status === 'done' || status === 'finished' ? 'happy' : 'open',
     isCheering: status === 'done',
@@ -229,11 +235,10 @@ export function crab(x: number, y: number, costume: string, status: CrabPose, sc
     if (!groups.has(cls)) groups.set(cls, [])
     groups.get(cls)?.push(`<rect x="${cx}" y="${cy}" width="${w}" height="${h}" fill="${c}"/>`)
   }
-  const draw = COSTUMES[costume] ?? COSTUMES.other
-  draw?.(f, COSTUME_COLOR[costume] ?? '#888780', pose)
+  draw(f, pose)
   const group = (cls: string) => `<g class="${cls}">${(groups.get(cls) ?? []).join('')}</g>`
   const props = [...groups.keys()].filter(k => k !== 'bd' && k !== 'la' && k !== 'lb')
   const body = `<g class="bd">${(groups.get('bd') ?? []).join('')}${props.map(group).join('')}</g>`
   const dim = status === 'proposed' ? ' opacity="0.45"' : status === 'dismissed' ? ' opacity="0.3"' : ''
-  return `<g transform="translate(${x},${y}) scale(${scale})" shape-rendering="crispEdges"><g${dim}><g class="c-${costume}${MOTION[status]}">${body}${group('la')}${group('lb')}</g></g>${EXTRAS[status] ?? ''}</g>`
+  return `<g transform="translate(${x},${y}) scale(${scale})" shape-rendering="crispEdges"><g${dim}><g class="${cls}${MOTION[status]}">${body}${group('la')}${group('lb')}</g></g>${EXTRAS[status] ?? ''}</g>`
 }

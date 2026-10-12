@@ -1,0 +1,193 @@
+<title>Crab Holiday Wardrobe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a wardrobe catalogue. Proposal first, then a sticky rail of holidays over cards that read like garment tags. */
+:root {
+  --bg: #F1F1EE; --surface: #FFFFFF; --ink: #1F1E1D; --muted: #67665F; --line: #E0DFD9;
+  --accent: #C4623F; --stage-theme: #FAF9F5; --code: #F4F3EF;
+  --app-light: #FAF9F5; --app-dark: #262624; --app-light-ink: #1f1f1f; --app-dark-ink: #ececec;
+  --display: 'Pixelify Sans', ui-monospace, monospace;
+  --body: 'Atkinson Hyperlegible', -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #181817; --surface: #222221; --ink: #ECEBE7; --muted: #A4A39D; --line: #35342F;
+  --accent: #E58A6B; --stage-theme: #262624; --code: #2A2A28; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #181817; --surface: #222221; --ink: #ECEBE7; --muted: #A4A39D; --line: #35342F;
+  --accent: #E58A6B; --stage-theme: #262624; --code: #2A2A28; color-scheme: dark }
+
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body); padding-inline: 16px; padding-block: 0 96px }
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 40px }
+h1, h2, h3 { text-wrap: balance; margin: 0 }
+h1 { font: 700 clamp(34px, 6vw, 56px)/1 var(--display); letter-spacing: .01em }
+h2 { font: 700 26px/1.1 var(--display) }
+h3 { font: 700 16px/1.2 var(--body) }
+code, .num { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums }
+p { margin: 0 }
+a { color: inherit }
+button { font: inherit; color: inherit }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+
+.top { padding-top: 40px; display: grid; gap: 14px }
+.eyebrow { font: 600 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
+.lede { max-width: 64ch; font-size: 17px; color: var(--muted) }
+.lede b { color: var(--ink) }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; font-size: 13px; color: var(--muted) }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface) }
+.seg button, .btn { border: 0; background: none; padding: 6px 12px; cursor: pointer; font-size: 13px }
+.seg button + button { border-left: 1px solid var(--line) }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg) }
+.btn { border: 1px solid var(--line); border-radius: 8px; background: var(--surface) }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700 }
+
+/* The proposal */
+.proposal { display: grid; gap: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 24px }
+.proposal > p { max-width: 70ch; color: var(--muted) }
+.calwrap { overflow-x: auto }
+.calendar { width: 100%; min-width: 620px; height: auto; display: block }
+.cal-grid { stroke: var(--line) }
+.cal-month { font: 11px var(--mono); fill: var(--muted) }
+.cal-name { font: 12.5px var(--body); fill: var(--ink) }
+.cal-today { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 3 2 }
+.cal-todaylabel { fill: var(--accent) }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 22px }
+.cols > div { display: grid; gap: 10px; align-content: start; min-width: 0 }
+.cols h3 { font: 700 15px var(--body) }
+.cols p, .cols li { color: var(--muted); font-size: 14px }
+.cols ul { margin: 0; padding-left: 18px; display: grid; gap: 4px }
+pre { margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; font: 12px/1.5 var(--mono) }
+.try { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px }
+.try input, .try select { font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink) }
+#try-out { font-weight: 700 }
+.demo { display: flex; flex-wrap: wrap; gap: 6px 10px }
+.demo figure { margin: 0; display: grid; justify-items: center; gap: 2px; background: var(--stage-theme); border-radius: 8px; padding: 4px 6px 6px }
+.demo figcaption { display: grid; justify-items: center; font-size: 11px; line-height: 1.25 }
+.demo code { font-size: 10px; color: var(--muted) }
+.tablewrap { overflow-x: auto }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 520px }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line) }
+thead th { font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted) }
+tbody th { font-weight: 700 }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px }
+.on { color: var(--accent); font-family: var(--body) }
+
+/* Holiday rail */
+.jump { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; gap: 6px; overflow-x: auto;
+  padding-block: 10px; background: var(--bg); border-bottom: 1px solid var(--line); scrollbar-width: thin }
+.jump a { flex: none; text-decoration: none; font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface) }
+.jump a::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--tint); margin-right: 6px }
+#gallery { display: grid; gap: 56px }
+.holiday { display: grid; gap: 18px; scroll-margin-top: 64px }
+.hhead { display: grid; gap: 4px; border-left: 6px solid var(--tint); padding-left: 12px }
+.when { color: var(--muted); font-size: 14px }
+.strips { display: grid; gap: 6px }
+.caption { font: 600 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted) }
+
+/* The strip mock and the swatches: the app's own light and dark grounds */
+.sw-l { background: var(--app-light); color: var(--app-light-ink) }
+.sw-d { background: var(--app-dark); color: var(--app-dark-ink) }
+.strip { display: flex; gap: 14px; overflow-x: auto; padding: 4px 10px; border-radius: 10px; border: 1px solid var(--line) }
+.scard { flex: none; display: flex; align-items: center; gap: 4px }
+.sbody { display: grid; gap: 3px; font: 600 12.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 470px), 1fr)); gap: 16px }
+.outfit { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; min-width: 0 }
+.outfit header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap }
+.outfit code { color: var(--muted) }
+.keep { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; user-select: none }
+.keep input { accent-color: var(--accent); width: 16px; height: 16px }
+.note { color: var(--muted); font-size: 14px; min-height: 2.6em }
+.stage { --stage: var(--stage-theme); display: flex; justify-content: space-between; gap: 4px; background: var(--stage); border-radius: 10px; padding: 6px }
+body[data-stage="light"] .stage { --stage: var(--app-light) }
+body[data-stage="dark"] .stage { --stage: var(--app-dark) }
+.stage figure { margin: 0; flex: 1; min-width: 0; display: grid; justify-items: center }
+.stage svg.zoom { width: 100%; max-width: 166.5px; height: auto }
+.stage figcaption { font: 11px var(--mono); color: var(--muted) }
+body[data-stage="light"] .stage figcaption { color: #6b6b68 }
+body[data-stage="dark"] .stage figcaption { color: #a8a8a4 }
+.swatches { display: grid; grid-template-columns: 1fr 1fr; gap: 6px }
+.swatch { border-radius: 8px; padding: 4px 6px 2px; min-width: 0 }
+.swlabel { font: 10px var(--mono); opacity: .65 }
+.swrow { display: flex; justify-content: space-between }
+.swcrab { display: flex }
+@media (max-width: 460px) { .swatches { grid-template-columns: 1fr } }
+
+.picks { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: center;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); background: var(--surface); border-top: 1px solid var(--line); font-size: 14px }
+.picks #picks-count { color: var(--muted) }
+.picks.has #picks-count { color: var(--ink); font-weight: 700 }
+.picks textarea { flex-basis: 100%; max-width: 640px; height: 6.5em; font: 12px var(--mono); background: var(--code); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px }
+body.paused svg * { animation-play-state: paused !important }
+@media (prefers-reduced-motion: reduce) { #motion { display: none } }
+</style>
+<div id="crab-css"></div>
+<main class="wrap">
+  <header class="top">
+    <p class="eyebrow">session-crew · design preview</p>
+    <h1>Holiday wardrobe</h1>
+    <p class="lede">Seasonal outfits for the crew's crabs, drawn by the mod's own crab code at the strip's real size and three times larger. <b id="count"></b>. Nothing is switched on yet: tick <b>Keep</b> on the ones you like, then copy the list back to Claude.</p>
+    <div class="controls">
+      <span>3× stage</span>
+      <span class="seg" role="group" aria-label="Background behind the large crabs">
+        <button type="button" data-stage="" aria-pressed="true">Your theme</button>
+        <button type="button" data-stage="light" aria-pressed="false">Light app</button>
+        <button type="button" data-stage="dark" aria-pressed="false">Dark app</button>
+      </span>
+      <button type="button" class="btn" id="motion" aria-pressed="false">Pause motion</button>
+    </div>
+  </header>
+
+  <section class="proposal" aria-labelledby="how">
+    <h2 id="how">How they would switch on</h2>
+    <p>A proposal, not built yet. Outside every window the crabs wear their usual costumes. Moving holidays (Lunar New Year, Easter, Hanukkah, Diwali, Thanksgiving) are worked out or looked up per year; the bars below come from the same window code.</p>
+    <div class="calwrap" id="calendar"></div>
+    <div class="cols">
+      <div>
+        <h3>When</h3>
+        <p>Each holiday has a date window. Where two overlap (Hanukkah inside December, Día de los Muertos at the end of October) their outfits share one pool.</p>
+        <div class="try"><label for="try-date">Try a date</label><input type="date" id="try-date"><span id="try-out" aria-live="polite"></span></div>
+      </div>
+      <div>
+        <h3>Who wears what</h3>
+        <ul>
+          <li>Stable per session: a hash of the session id and the year picks the outfit, so a crab looks the same in every panel and after a restart, with nothing stored.</li>
+          <li>No twins: sessions take theirs in join order and a clash moves to the next free outfit.</li>
+          <li>Your <code>faces</code> rules and <code>/crew face</code> still win, and can name a holiday outfit (<code>nut-*=witch</code>).</li>
+        </ul>
+        <div class="try"><label for="demo-holiday">Six example sessions in</label><select id="demo-holiday"></select></div>
+        <div class="demo" id="demo"></div>
+      </div>
+      <div>
+        <h3>Turning it off, or forcing one</h3>
+        <p>A new option, plus a command for trying them out:</p>
+<pre>"pluginConfigs": {
+  "session-crew": {
+    "options": {
+      "holidays": "auto",
+      "skipHolidays": ["thanksgiving"]
+    }
+  }
+}</pre>
+        <ul>
+          <li><code>auto</code> (default) follows the calendar; <code>off</code> never dresses up; a holiday id (<code>halloween</code>) forces it whatever the date.</li>
+          <li><code>skipHolidays</code> leaves out ones you don't celebrate.</li>
+          <li><code>/crew holiday &lt;id|auto|off&gt;</code> overrides it until you change it back, kept like <code>/crew strip</code>.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="tablewrap" id="windows"></div>
+  </section>
+
+  <nav class="jump" id="jump" aria-label="Holidays"></nav>
+  <div id="gallery"></div>
+</main>
+<div class="picks" id="picks">
+  <span id="picks-count" aria-live="polite"></span>
+  <button type="button" class="btn primary" id="copy-picks">Copy list</button>
+  <button type="button" class="btn" id="clear-picks">Clear</button>
+  <textarea id="picks-text" hidden readonly aria-label="Your kept outfits"></textarea>
+</div>
+<script>/*BUNDLE*/</script>
