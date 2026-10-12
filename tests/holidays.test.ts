@@ -83,9 +83,9 @@ describe('holiday outfits', () => {
 describe('switching on (proposal)', () => {
   const on = (y: number, m: number, d: number) => holidaysOn(new Date(y, m - 1, d)).map(h => h.id)
 
-  test('Halloween runs Oct 15–31', () => {
-    expect(on(2026, 10, 14)).not.toContain('halloween')
-    expect(on(2026, 10, 15)).toContain('halloween')
+  test('Halloween runs Oct 1–31', () => {
+    expect(on(2026, 9, 30)).not.toContain('halloween')
+    expect(on(2026, 10, 1)).toContain('halloween')
     expect(on(2026, 10, 31)).toContain('halloween')
     expect(on(2026, 11, 1)).not.toContain('halloween')
   })

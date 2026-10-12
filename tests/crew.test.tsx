@@ -835,7 +835,7 @@ describe('hooks', () => {
     await $.command.run({ command: 'crew', args: 'holiday off' } as never)
     expect(await faces()).toContain('crew  one: astronaut')
     expect((await $.command.run({ command: 'crew', args: 'holiday easter-ish' } as never)).text).toContain('No holiday "easter-ish"')
-    expect((await $.command.run({ command: 'crew', args: 'holiday list' } as never)).text).toContain('halloween (Halloween, Oct 15–31): witch')
+    expect((await $.command.run({ command: 'crew', args: 'holiday list' } as never)).text).toContain('halloween (Halloween, Oct 1–31): witch')
   })
 
   test('the strip draws above whatever the band held, on each surface, and /crew strip turns it off', { options: { pollSeconds: 0 } }, async ($, on) => {

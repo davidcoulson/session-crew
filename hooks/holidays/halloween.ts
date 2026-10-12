@@ -1,4 +1,4 @@
-// Halloween, Oct 15–31.
+// Halloween, Oct 1–31.
 
 import { C, INK, crabBody, eyes, fixed, stamp } from './kit'
 import type { Holiday } from './kit'
@@ -9,8 +9,8 @@ const HAT_RIM = '#54457A'
 export const HALLOWEEN: Holiday = {
   id: 'halloween',
   name: 'Halloween',
-  when: 'Oct 15–31',
-  window: fixed([10, 15], [10, 31]),
+  when: 'Oct 1–31',
+  window: fixed([10, 1], [10, 31]),
   outfits: [
     {
       id: 'witch',

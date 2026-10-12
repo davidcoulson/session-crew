@@ -18,7 +18,7 @@
     "holidays": {
       "type": "string",
       "title": "Holiday outfits",
-      "description": "auto dresses the crabs for holidays in their date windows (Halloween Oct 15–31, Christmas Dec 1–26, and more; /crew holiday list); off never does; a holiday's id (halloween, christmas, …) forces it whatever the date. /crew holiday overrides it.",
+      "description": "auto dresses the crabs for holidays in their date windows (Halloween Oct 1–31, Christmas Dec 1–26, and more; /crew holiday list); off never does; a holiday's id (halloween, christmas, …) forces it whatever the date. /crew holiday overrides it.",
       "default": "auto"
     },
     "skipHolidays": {

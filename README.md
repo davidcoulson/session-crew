@@ -138,7 +138,7 @@ holidays, `/crew holiday list`):
 | Easter | the Sunday before through Easter Monday | 5 |
 | 4th of July | Jul 1–5 | 7 |
 | Día de los Muertos | Oct 28 – Nov 2 | 10 |
-| Halloween | Oct 15–31 | 12 |
+| Halloween | Oct 1–31 | 12 |
 | Diwali | two days either side of the main day | 10 |
 | Thanksgiving | three days either side of the fourth Thursday in November | 8 |
 | Hanukkah | the eight nights | 9 |
