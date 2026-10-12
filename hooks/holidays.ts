@@ -8,12 +8,25 @@ import { CRAB_CSS, drawCrab } from './crab'
 import type { CrabPose } from './crab'
 import { KIT_CSS } from './holidays/kit'
 import type { Holiday, Outfit } from './holidays/kit'
+import { CHRISTMAS } from './holidays/christmas'
+import { DIWALI } from './holidays/diwali'
+import { EASTER } from './holidays/easter'
 import { HALLOWEEN } from './holidays/halloween'
+import { HANUKKAH } from './holidays/hanukkah'
+import { JULY_4 } from './holidays/july4'
+import { LUNAR_NEW_YEAR } from './holidays/lunarnewyear'
+import { MUERTOS } from './holidays/muertos'
+import { NEW_YEAR } from './holidays/newyear'
+import { ST_PATRICK } from './holidays/stpatrick'
+import { THANKSGIVING } from './holidays/thanksgiving'
+import { VALENTINE } from './holidays/valentine'
 
 export type { Holiday, Outfit }
 
 /** In calendar order from January. */
-export const HOLIDAYS: Holiday[] = [HALLOWEEN]
+export const HOLIDAYS: Holiday[] = [
+  LUNAR_NEW_YEAR, VALENTINE, ST_PATRICK, EASTER, JULY_4, MUERTOS, HALLOWEEN, DIWALI, THANKSGIVING, HANUKKAH, CHRISTMAS, NEW_YEAR,
+]
 
 export const OUTFITS: Map<string, { outfit: Outfit; holiday: Holiday }> = new Map(
   HOLIDAYS.flatMap(h => h.outfits.map(o => [o.id, { outfit: o, holiday: h }] as const)),

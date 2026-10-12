@@ -124,6 +124,13 @@ Sessions without a rule take the first six in turn. By status:
 `prefers-reduced-motion` stops every animation and keeps the poses. The terminal draws
 savvy-progress's `▣` in the costume's color, with a spinner, `zZz` or `\o/` beside it.
 
+### Holiday outfits (preview only)
+
+`hooks/holidays.ts` and `hooks/holidays/*.ts` draw seasonal outfits (Halloween, Christmas, Hanukkah and more) with the
+same frame, body and motion as the costumes above. They aren't switched on yet. To see them all, build the gallery with
+`bun scripts/build-preview.ts` and open `preview/holidays.html`: every outfit working, needing you and idle, at the
+strip's real size and three times larger, on the app's light and dark grounds, with the proposal for when they'd switch on.
+
 ## Importing sessions that already exist
 
 A session's panel starts with only the sessions *it* starts (and the family the app lists in its

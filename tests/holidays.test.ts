@@ -2,6 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { HOLIDAYS, HOLIDAY_CSS, OUTFITS, activeHolidays, assignOutfits, holidayCrab, holidaysOn } from '../hooks/holidays'
 import type { CrabPose } from '../hooks/crab'
+import { easterSunday } from '../hooks/holidays/easter'
+import { thanksgivingDay } from '../hooks/holidays/thanksgiving'
 
 const POSES: CrabPose[] = ['working', 'idle', 'done', 'proposed', 'dismissed', 'waiting', 'finished']
 
@@ -84,6 +86,36 @@ describe('switching on (proposal)', () => {
     expect(on(2026, 10, 15)).toContain('halloween')
     expect(on(2026, 10, 31)).toContain('halloween')
     expect(on(2026, 11, 1)).not.toContain('halloween')
+  })
+
+  test('moving and wrapping windows', () => {
+    // Hanukkah 2026: the first evening Dec 4, eight nights.
+    expect(on(2026, 12, 3)).not.toContain('hanukkah')
+    expect(on(2026, 12, 4)).toContain('hanukkah')
+    expect(on(2026, 12, 12)).toContain('hanukkah')
+    expect(on(2026, 12, 13)).not.toContain('hanukkah')
+    // Overlaps pool: Hanukkah inside Christmas, Muertos at the end of Halloween.
+    expect(on(2026, 12, 10)).toEqual(expect.arrayContaining(['hanukkah', 'christmas']))
+    expect(on(2026, 10, 30)).toEqual(expect.arrayContaining(['halloween', 'muertos']))
+    // New Year's Eve wraps the year: on from Dec 29 to Jan 2 either side.
+    expect(on(2026, 12, 29)).toContain('newyear')
+    expect(on(2027, 1, 2)).toContain('newyear')
+    expect(on(2027, 1, 3)).not.toContain('newyear')
+    // Thanksgiving 2026 is Thursday Nov 26.
+    expect(thanksgivingDay(2026).getDate()).toBe(26)
+    expect(on(2026, 11, 23)).toContain('thanksgiving')
+    expect(on(2026, 11, 30)).not.toContain('thanksgiving')
+    // Lunar New Year 2027 is Feb 6: the eve through the first week.
+    expect(on(2027, 2, 5)).toContain('lunarnewyear')
+    expect(on(2027, 2, 13)).toContain('lunarnewyear')
+    expect(on(2027, 2, 14)).not.toContain('lunarnewyear')
+    // Easter 2027 is Mar 28: from the Sunday before through Easter Monday.
+    expect(easterSunday(2027).getMonth() * 100 + easterSunday(2027).getDate()).toBe(228)
+    expect(on(2027, 3, 21)).toContain('easter')
+    expect(on(2027, 3, 29)).toContain('easter')
+    expect(on(2027, 3, 30)).not.toContain('easter')
+    // Past the tables nothing turns on by mistake.
+    expect(on(2040, 2, 10)).not.toContain('lunarnewyear')
   })
 
   test('off never dresses up; a holiday id forces it', () => {

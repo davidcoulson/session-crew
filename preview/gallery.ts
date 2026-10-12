@@ -142,7 +142,8 @@ function calendar(today: Date): string {
 }
 
 function windowsTable(today: Date): string {
-  const rows = HOLIDAYS.map(h => {
+  const soon = (h: Holiday) => +(nextWindow(h, today)?.[0] ?? Infinity)
+  const rows = [...HOLIDAYS].sort((a, b) => soon(a) - soon(b)).map(h => {
     const w = nextWindow(h, today)
     const on = activeHolidays(today).includes(h)
     return `<tr><th scope="row"><span class="dot" style="background:${TINT[h.id] ?? '#888'}"></span>${esc(h.name)}</th><td>${esc(h.when)}</td><td class="num">${w ? `${fmt(w[0])} – ${fmt(w[1])} ${w[1].getFullYear()}` : 'past the table'}${on ? ' <b class="on">on now</b>' : ''}</td><td class="num">${h.outfits.length}</td></tr>`
