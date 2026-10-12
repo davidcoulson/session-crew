@@ -216,7 +216,7 @@ For desktop-app sessions, name the folder in `~/.claude/settings.json`:
 
 ```json
 "env": {
-  "CLAUDE_CODE_PLUGIN_DIRS": "/Users/david/dev/session-crew"
+  "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/session-crew"
 }
 ```
 
@@ -228,7 +228,7 @@ The crab art, costumes and their motion (`hooks/crab.ts`) are copied from
 [savvy-progress](https://github.com/JohnnyVizz/claude-kit/tree/main/plugins/savvy-progress) by
 [johnnyvizz](https://github.com/johnnyvizz), MIT License; its notice is in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). savvy-progress in turn credits the pixel crab to
-DockCrab (Clawdy), whose license was not found; check it before publishing this mod.
+DockCrab (Clawdy), whose own license was not found.
 The resting and cheering poses are new here.
 
 ## Developing
@@ -244,3 +244,8 @@ use). If the terminal's `claude` is older, run the desktop app's own CLI:
 
 `hooks/parse.ts` holds the parsing, merging and costume logic as pure functions; `hooks/crab.ts`
 the crab art; `hooks/register.tsx` the hooks and drawing; `types/index.d.ts` the `$.state` contract.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The crab art is third-party; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
