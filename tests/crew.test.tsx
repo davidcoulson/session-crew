@@ -1048,6 +1048,42 @@ describe('hooks', () => {
     await ui.unmount()
   })
 
+  test('a transcript read that fails is tried again, so a question still shows as needs you', { options: { pollSeconds: 0 } }, async ($, on) => {
+    const clock = host(on)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    let fails = 2
+    let reads = 0
+    on('mcp.call', (_$, e) => {
+      if ((e as unknown as { tool: string }).tool !== 'list_events') throw new Error('not here')
+      reads++
+      if (fails-- > 0) throw new Error('server still connecting')
+      return { value: { content: [{ type: 'text', text: '[assistant] Two ways to do it. Want me to take the first?\n[result] done' }], isError: false } }
+    })
+    await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+    const sid = 'local_00000000-0000-0000-0000-000000000401'
+    const report = (status: string) => $.tool.call({ tool: 'mcp__session-crew__status', sessions: [{ id: sid, name: 'asker', title: 'Asker', status }] } as never)
+    await report('working')
+    await report('idle')
+    const pose = async () => {
+      const ui = await $.ui.mount({ plugin: 'session-crew', component: 'AbovePrompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { bodyRows: 9, offset: 0, total: 0 } } } as never)
+      const alt = String((await ui.find({ type: 'Svg' }))?.props.alt)
+      await ui.unmount()
+      return alt
+    }
+    await clock.advance(10)
+    expect(reads).toBe(1)
+    expect(await pose()).toBe('Asker: idle')
+    // 10 s, then 20 s later: the third try answers.
+    await clock.advance(10_000)
+    expect(reads).toBe(2)
+    await clock.advance(20_000)
+    expect(reads).toBe(3)
+    expect(await pose()).toBe('Asker: needs you')
+    // Read once it answered: not asked again this idle spell.
+    await clock.advance(120_000)
+    expect(reads).toBe(3)
+  })
+
   test('pressing a crab card shows its session; refused, the pane opens with its row marked', { options: { pollSeconds: 0 } }, async ($, on) => {
     host(on)
     const calls: { server: string; tool: string; args: Record<string, unknown> }[] = []

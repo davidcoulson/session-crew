@@ -163,35 +163,53 @@ function showStatus($: EngineInterface, list: CrewSession[], at: number): void {
 // The app's "It reported" note says it for sessions this one started, when it is not
 // cut short; otherwise the session's own transcript (list_events) does, once per idle spell.
 
-// The idle spell (its changedAt) each session's transcript was read for: one read per spell per load.
-const turnRead = new Map<string, number>()
+// Per session, the idle spell (its changedAt) its transcript was read for: `isDone` once it answered,
+// else the failed tries so far and when the next may go. A failure (the app's server not up yet, an
+// error) is tried again, so one bad call never leaves a question drawn as plain idle for good.
+type TurnRead = { spell: number; isDone: boolean; tries: number; nextAt: number }
+const turnRead = new Map<string, TurnRead>()
 let readingTurns = false
+// After a failed read: 10 s, 20 s, 40 s… up to TURN_TRIES tries a spell.
+const TURN_RETRY_MS = 10_000
+const TURN_TRIES = 6
 
-/** An idle session the strip or pane would show, whose turn's ending is not known yet. */
-const needsTurnRead = (s: CrewSession, at: number): boolean =>
-  s.status === 'idle' &&
-  s.changeSeenAt !== undefined &&
-  s.id.startsWith('local_') &&
-  !isArchivedRow(s) &&
-  at - s.changedAt < PANE_TIMES.needsMs &&
-  turnOf(s) === undefined &&
-  turnRead.get(s.id) !== s.changedAt
+/** An idle session the strip or pane would show, whose turn's ending is not known yet and may be read now. */
+const needsTurnRead = (s: CrewSession, at: number): boolean => {
+  if (s.status !== 'idle' || s.changeSeenAt === undefined || !s.id.startsWith('local_') || isArchivedRow(s)) return false
+  if (at - s.changedAt >= PANE_TIMES.needsMs || turnOf(s) !== undefined) return false
+  const r = turnRead.get(s.id)
+  return !r || r.spell !== s.changedAt || (!r.isDone && r.tries < TURN_TRIES && at >= r.nextAt)
+}
 
 async function readTurnEnds($: EngineInterface): Promise<void> {
   if (readingTurns) return
   readingTurns = true
+  let retryIn: number | null = null
   try {
     const at = await $.clock.now()
     const todo = (await read($, crew)).filter(s => needsTurnRead(s, at)).slice(0, 8)
     for (const s of todo) {
-      turnRead.set(s.id, s.changedAt)
+      const prev = turnRead.get(s.id)
+      const tries = prev && prev.spell === s.changedAt ? prev.tries : 0
       let text: string | null = null
+      let isAnswered = false
       try {
-        const r = await $.mcp.call(MGMT_SERVER, 'list_events', { session_id: s.id, limit: 8 })
-        if (!r.isError) text = lastAssistantText(mcpText(r))
+        const r = await $.mcp.call(MGMT_SERVER, 'list_events', { session_id: s.id, limit: 20 })
+        if (!r.isError) {
+          isAnswered = true
+          text = lastAssistantText(mcpText(r))
+        }
       } catch {
-        // No transcript: the turn stays unknown, drawn as plain idle.
+        // Tried again below.
       }
+      if (!isAnswered) {
+        const wait = TURN_RETRY_MS * 2 ** tries
+        turnRead.set(s.id, { spell: s.changedAt, isDone: false, tries: tries + 1, nextAt: at + wait })
+        if (tries + 1 < TURN_TRIES) retryIn = Math.min(retryIn ?? wait, wait)
+        continue
+      }
+      // A transcript with no message of its own to read (all tool rows): plain idle, not asked again this spell.
+      turnRead.set(s.id, { spell: s.changedAt, isDone: true, tries, nextAt: at })
       if (!text) continue
       // Only if it is still the same idle spell: one that resumed meanwhile is read again when it next stops.
       const nowRow = (await read($, crew)).find(x => x.id === s.id)
@@ -201,6 +219,10 @@ async function readTurnEnds($: EngineInterface): Promise<void> {
   } finally {
     readingTurns = false
   }
+  if (retryIn !== null) $.clock.after(retryIn, () => void readTurnEnds($))
+  // A session that went idle while this read ran (its own call returned early): read it now.
+  const at = await $.clock.now()
+  if ((await read($, crew)).some(s => needsTurnRead(s, at))) $.clock.after(0, () => void readTurnEnds($))
 }
 
 // --- showing a session in the app's main pane ---------------------------------------
